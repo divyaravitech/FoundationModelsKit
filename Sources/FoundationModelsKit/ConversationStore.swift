@@ -3,8 +3,8 @@
 //
 // Context-window management strategy:
 //   When the transcript grows too large, the oldest entries are summarised
-//   into a single "[COMPACTED SUMMARY]" entry by any LanguageModelProviding
-//   conformer, keeping the most recent turns intact for coherence.
+//   into a single "[COMPACTED SUMMARY]" entry, keeping the most recent turns
+//   intact for immediate coherence.
 
 import Foundation
 
@@ -54,8 +54,8 @@ public struct ConversationEntry: Sendable, Codable {
 /// ```
 public actor ConversationStore: Sendable {
 
-    // Number of recent entries to preserve untouched during compaction.
-    // Keeping the tail ensures the model retains immediate context.
+    // Recent entries preserved verbatim during compaction so the model
+    // always sees the most immediate conversational context.
     private static let recentEntriesToKeep = 5
 
     private var entries: [ConversationEntry] = []
@@ -69,13 +69,20 @@ public actor ConversationStore: Sendable {
         entries.append(entry)
     }
 
+    /// Removes the last entry. Used to roll back a dangling user turn when
+    /// the subsequent model call throws.
+    public func removeLastEntry() {
+        guard !entries.isEmpty else { return }
+        entries.removeLast()
+    }
+
     /// Returns the full conversation formatted as plain text.
     /// Each turn is rendered as `[role] content`, separated by blank lines.
     public func transcript() -> String {
         entries.map { "[\($0.role)] \($0.content)" }.joined(separator: "\n\n")
     }
 
-    /// Number of entries currently in the store. Useful for tests and telemetry.
+    /// Number of entries currently in the store.
     public var entryCount: Int { entries.count }
 
     /// Returns `true` when the transcript is long enough that context-window
@@ -83,23 +90,19 @@ public actor ConversationStore: Sendable {
     ///
     /// Heuristic: 1 token ≈ 4 characters (conservative English estimate).
     public func shouldCompact(maxTokens: Int) -> Bool {
-        transcript().count > maxTokens * 4
+        // Avoid materialising the full transcript string; sum content lengths instead.
+        let totalChars = entries.reduce(0) { $0 + $1.content.count }
+        return totalChars > maxTokens * 4
     }
 
     /// Summarises the oldest entries into a single compacted entry using
     /// `model`, then replaces them in-place.
     ///
-    /// The most recent `recentEntriesToKeep` entries are never touched so
-    /// that the model retains the immediate conversational context.
-    ///
-    /// - Parameters:
-    ///   - model: Any backend conforming to `LanguageModelProviding`.
-    ///   - maxTokens: Passed through to `shouldCompact` — used here only to
-    ///     guard against compacting an already-small transcript.
+    /// The `maxTokens` guard inside `compact` is intentionally removed — the
+    /// caller (`SDKIntegration`) already checked `shouldCompact` before calling,
+    /// and re-checking inside the actor would recompute O(n) state for no benefit.
     public func compact(using model: any LanguageModelProviding, maxTokens: Int) async throws {
-        // Nothing to compact if the store is tiny.
         guard entries.count > Self.recentEntriesToKeep else { return }
-        guard shouldCompact(maxTokens: maxTokens) else { return }
 
         let splitIndex = entries.index(entries.endIndex, offsetBy: -Self.recentEntriesToKeep)
         let oldEntries = Array(entries[..<splitIndex])
@@ -112,15 +115,14 @@ public actor ConversationStore: Sendable {
         let prompt = """
         The following is a conversation history that needs to be condensed. \
         Summarise it in 2–3 bullet points, preserving key decisions, facts, \
-        and context that would be needed to continue the conversation naturally. \
-        Be concise.
+        and context needed to continue the conversation naturally. Be concise.
 
         \(historyText)
         """
 
         let request = ModelRequest(
             content: prompt,
-            privacySensitivity: .high,  // treat history as sensitive by default
+            privacySensitivity: .high,
             taskComplexity: .simple
         )
 
@@ -130,8 +132,7 @@ public actor ConversationStore: Sendable {
         let summaryEntry = ConversationEntry(
             role: "assistant",
             content: "[COMPACTED SUMMARY] \(summaryText)",
-            timestamp: Date(),
-            toolsUsed: nil
+            timestamp: Date()
         )
 
         entries = [summaryEntry] + recentEntries

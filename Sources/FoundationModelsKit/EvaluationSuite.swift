@@ -1,8 +1,7 @@
 // EvaluationSuite.swift
 // Evaluates model outputs against quality, safety, and consistency criteria.
 //
-// Custom metrics conform to EvaluationMetric and are injected at init time,
-// so the suite never hard-codes what "good" means for a given use-case.
+// Custom metrics conform to EvaluationMetric and are injected at init time.
 
 import Foundation
 
@@ -10,10 +9,7 @@ import Foundation
 
 /// A single, named evaluation criterion.
 public protocol EvaluationMetric: Sendable {
-    /// Human-readable identifier shown in reports and logs.
     var name: String { get }
-
-    /// Score the response. Must be safe to call from any concurrency context.
     func evaluate(response: ModelResponse) async -> EvaluationScore
 }
 
@@ -21,17 +17,16 @@ public protocol EvaluationMetric: Sendable {
 
 /// The result of applying one metric to one response.
 public struct EvaluationScore: Sendable, Codable {
-    /// Matches `EvaluationMetric.name` so scores can be correlated back to
-    /// the metric that produced them.
+    /// Matches `EvaluationMetric.name`.
     public var metricName: String
 
     /// Normalised quality signal in [0.0, 1.0]. 1.0 is best.
     public var score: Double
 
-    /// Convenience flag: `true` when `score >= metric threshold`.
+    /// `true` when the response satisfies this metric's pass threshold.
     public var passed: Bool
 
-    /// Optional human-readable explanation (failure reason, matched keywords…).
+    /// Optional human-readable explanation.
     public var details: String?
 
     public init(metricName: String, score: Double, passed: Bool, details: String? = nil) {
@@ -46,16 +41,12 @@ public struct EvaluationScore: Sendable, Codable {
 
 /// Aggregated outcome for a single model response across all metrics.
 public struct EvaluationResult: Sendable, Codable {
-    /// Caller-supplied identifier that links this result back to a request.
     public var responseID: String
-
-    /// One score per metric, in the order the suite evaluated them.
     public var scores: [EvaluationScore]
 
     /// `true` only when every individual score passed.
     public var overallPassed: Bool
 
-    /// Wall-clock time the evaluation completed.
     public var timestamp: Date
 
     public init(
@@ -69,19 +60,24 @@ public struct EvaluationResult: Sendable, Codable {
         self.overallPassed = overallPassed
         self.timestamp = timestamp
     }
+
+    /// Average score across all metrics.
+    public var averageScore: Double {
+        guard !scores.isEmpty else { return 0 }
+        return scores.reduce(0) { $0 + $1.score } / Double(scores.count)
+    }
 }
 
 // MARK: - Suite
 
-/// Actor-isolated runner that applies a fixed set of metrics to one or more
-/// model responses.
+/// Actor-isolated runner that applies a fixed set of metrics to responses.
 ///
 /// Usage:
 /// ```swift
 /// let suite = EvaluationSuite(metrics: [
 ///     NonEmptyMetric(),
 ///     LengthMetric(min: 10, max: 500),
-///     ContainsKeywordsMetric(keywords: ["summary", "conclusion"]),
+///     ContainsKeywordsMetric(keywords: ["summary"]),
 /// ])
 /// let result = await suite.evaluate(response: response, responseID: "turn-1")
 /// ```
@@ -92,34 +88,54 @@ public actor EvaluationSuite: Sendable {
         self.metrics = metrics
     }
 
-    /// Runs all metrics against `response` and returns an aggregated result.
+    /// Runs all metrics against `response` concurrently and returns an
+    /// aggregated result. Result order matches metric insertion order.
     public func evaluate(response: ModelResponse, responseID: String) async -> EvaluationResult {
-        var scores: [EvaluationScore] = []
+        let scores = await withTaskGroup(
+            of: (index: Int, score: EvaluationScore).self,
+            returning: [EvaluationScore].self
+        ) { group in
+            for (index, metric) in metrics.enumerated() {
+                group.addTask {
+                    let score = await metric.evaluate(response: response)
+                    return (index, score)
+                }
+            }
 
-        for metric in metrics {
-            let score = await metric.evaluate(response: response)
-            scores.append(score)
+            // Collect and sort by original index to preserve metric order.
+            var unsorted: [(index: Int, score: EvaluationScore)] = []
+            for await pair in group { unsorted.append(pair) }
+            return unsorted.sorted { $0.index < $1.index }.map(\.score)
         }
 
-        let overallPassed = scores.allSatisfy(\.passed)
         return EvaluationResult(
             responseID: responseID,
             scores: scores,
-            overallPassed: overallPassed,
+            overallPassed: scores.allSatisfy(\.passed),
             timestamp: Date()
         )
     }
 
-    /// Evaluates a batch of responses, assigning auto-generated IDs
-    /// (`"response-0"`, `"response-1"`, …) when the caller doesn't need
-    /// to supply explicit identifiers.
+    /// Evaluates a batch of responses concurrently. IDs default to
+    /// `"response-0"`, `"response-1"`, … Results preserve input order.
     public func evaluateBatch(responses: [ModelResponse]) async -> [EvaluationResult] {
-        var results: [EvaluationResult] = []
-        for (index, response) in responses.enumerated() {
-            let result = await evaluate(response: response, responseID: "response-\(index)")
-            results.append(result)
+        await withTaskGroup(
+            of: (index: Int, result: EvaluationResult).self,
+            returning: [EvaluationResult].self
+        ) { group in
+            for (index, response) in responses.enumerated() {
+                group.addTask {
+                    let result = await self.evaluate(
+                        response: response,
+                        responseID: "response-\(index)"
+                    )
+                    return (index, result)
+                }
+            }
+            var unsorted: [(index: Int, result: EvaluationResult)] = []
+            for await pair in group { unsorted.append(pair) }
+            return unsorted.sorted { $0.index < $1.index }.map(\.result)
         }
-        return results
     }
 }
 
@@ -128,7 +144,6 @@ public actor EvaluationSuite: Sendable {
 /// Fails when the response body is empty or contains only whitespace.
 public struct NonEmptyMetric: EvaluationMetric, Sendable {
     public let name = "NonEmpty"
-
     public init() {}
 
     public func evaluate(response: ModelResponse) async -> EvaluationScore {
@@ -143,7 +158,10 @@ public struct NonEmptyMetric: EvaluationMetric, Sendable {
     }
 }
 
-/// Checks that the response length falls within an inclusive character range.
+/// Checks that the response length (in characters) falls within [min, max].
+///
+/// Score is 1.0 anywhere inside the range and falls linearly to 0 outside it,
+/// so boundary values always score 1.0 when `passed` is `true`.
 public struct LengthMetric: EvaluationMetric, Sendable {
     public let name = "Length"
     public let min: Int
@@ -158,11 +176,17 @@ public struct LengthMetric: EvaluationMetric, Sendable {
         let length = response.content.count
         let passed = length >= min && length <= max
 
-        // Normalise: 1.0 at the ideal midpoint, falling toward 0 at the edges.
-        let midpoint = Double(min + max) / 2.0
-        let halfRange = Double(max - min) / 2.0
-        let raw = halfRange > 0 ? 1.0 - abs(Double(length) - midpoint) / halfRange : (passed ? 1.0 : 0.0)
-        let score = Swift.max(0.0, raw)
+        // Score: 1.0 anywhere in [min, max]; decreases linearly outside.
+        let score: Double
+        if passed {
+            score = 1.0
+        } else if length < min {
+            let overshoot = Double(min - length)
+            score = Swift.max(0.0, 1.0 - overshoot / Double(Swift.max(min, 1)))
+        } else {
+            let overshoot = Double(length - max)
+            score = Swift.max(0.0, 1.0 - overshoot / Double(Swift.max(max, 1)))
+        }
 
         let details = passed
             ? "Length \(length) is within [\(min), \(max)]."
@@ -173,10 +197,9 @@ public struct LengthMetric: EvaluationMetric, Sendable {
 }
 
 /// Checks that the response contains all required keywords (case-insensitive).
+/// Partial matches receive proportional credit (e.g. 3 of 4 → score 0.75).
 public struct ContainsKeywordsMetric: EvaluationMetric, Sendable {
     public let name = "ContainsKeywords"
-
-    /// All of these must appear in the response for it to pass.
     public let keywords: [String]
 
     public init(keywords: [String]) {
@@ -190,14 +213,14 @@ public struct ContainsKeywordsMetric: EvaluationMetric, Sendable {
         }
 
         let lowercased = response.content.lowercased()
-        let found = keywords.filter { lowercased.contains($0.lowercased()) }
-        let score = Double(found.count) / Double(keywords.count)
-        let passed = found.count == keywords.count
-
+        let found   = keywords.filter { lowercased.contains($0.lowercased()) }
         let missing = keywords.filter { !lowercased.contains($0.lowercased()) }
+        let score   = Double(found.count) / Double(keywords.count)
+        let passed  = missing.isEmpty
+
         let details = passed
             ? "All \(keywords.count) keyword(s) found."
-            : "Missing keyword(s): \(missing.joined(separator: ", "))"
+            : "Missing: \(missing.joined(separator: ", "))"
 
         return EvaluationScore(metricName: name, score: score, passed: passed, details: details)
     }

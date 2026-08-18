@@ -1,19 +1,14 @@
 // SDKIntegration.swift
 // Facade that wires ModelRouter, ConversationStore, EvaluationSuite, and
 // RegionalAvailability behind a single async entry point.
-//
-// Callers import FoundationModelsKit, build a FoundationModelsKitConfiguration,
-// and interact exclusively with SDKIntegration — the individual actors stay
-// hidden behind it.
 
 import Foundation
 
 // MARK: - Configuration
 
 /// Declarative configuration for the entire SDK stack.
-/// Serialize to disk or pass via dependency injection.
 public struct FoundationModelsKitConfiguration: Sendable, Codable {
-    /// Routing and context-management preferences (see DynamicProfileBuilder).
+    /// Routing and context-management preferences.
     public var profile: DynamicProfile
 
     /// Names of built-in metrics to apply to every response.
@@ -21,9 +16,7 @@ public struct FoundationModelsKitConfiguration: Sendable, Codable {
     /// Unknown names are silently ignored.
     public var evaluationMetrics: [String]
 
-    /// When `true`, the facade consults `RegionalAvailability` before routing
-    /// and may adjust the request's privacy sensitivity to match the region's
-    /// best available tier.
+    /// When `true`, consults `RegionalAvailability` before routing.
     public var regionAwareness: Bool
 
     /// When `true`, each request/response cycle appends a diagnostic entry.
@@ -44,17 +37,24 @@ public struct FoundationModelsKitConfiguration: Sendable, Codable {
 
 // MARK: - Diagnostic entry
 
-/// One entry in the in-memory operation log.
+// ISO8601DateFormatter is not Sendable, but is safe to read-only share after
+// initialisation. Marked nonisolated(unsafe) to satisfy strict concurrency.
+private nonisolated(unsafe) let sharedISO8601Formatter: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
+    f.formatOptions = [.withInternetDateTime]
+    return f
+}()
+
 private struct DiagnosticEntry: Sendable {
     let timestamp: Date
-    let requestSnippet: String  // first 80 chars of request content
+    let requestSnippet: String
     let tier: ModelTier?
-    let responseSnippet: String // first 80 chars of response content
+    let responseSnippet: String
     let evaluationPassed: Bool?
     let errorDescription: String?
 
     func formatted() -> String {
-        let ts = ISO8601DateFormatter().string(from: timestamp)
+        let ts = sharedISO8601Formatter.string(from: timestamp)
         let tierLabel = tier.map(\.rawValue) ?? "unknown"
         let evalLabel: String
         switch evaluationPassed {
@@ -65,23 +65,9 @@ private struct DiagnosticEntry: Sendable {
         if let err = errorDescription {
             return "[\(ts)] tier=\(tierLabel) ERROR: \(err)"
         }
-        return """
-        [\(ts)] tier=\(tierLabel) \(evalLabel)
-          req: \(requestSnippet)
-          res: \(responseSnippet)
-        """
+        return "[\(ts)] tier=\(tierLabel) \(evalLabel)\n  req: \(requestSnippet)\n  res: \(responseSnippet)"
     }
-}
 
-// MARK: - Router bridge
-
-/// Thin `LanguageModelProviding` wrapper around `ModelRouter` so it can be
-/// passed to APIs that expect the protocol (e.g. `ConversationStore.compact`).
-private struct RouterBridge: LanguageModelProviding, Sendable {
-    let router: ModelRouter
-    func sendMessage(request: ModelRequest) async throws -> ModelResponse {
-        try await router.routeRequest(request)
-    }
 }
 
 // MARK: - Facade
@@ -89,14 +75,16 @@ private struct RouterBridge: LanguageModelProviding, Sendable {
 /// Single entry point for the FoundationModelsKit stack.
 ///
 /// `SDKIntegration` orchestrates:
-/// 1. Region check (optional)
-/// 2. Auto-compaction of the conversation store (if profile enables it)
+/// 1. Region check (optional) — resolves the best available tier
+/// 2. Auto-compaction of the conversation store
 /// 3. Routing via `ModelRouter`
-/// 4. Evaluation via `EvaluationSuite`
-/// 5. Appending the turn to `ConversationStore`
+/// 4. Evaluation via `EvaluationSuite` filtered to `config.evaluationMetrics`
+/// 5. Transcript management in `ConversationStore`
 /// 6. Diagnostic logging
 ///
-/// Usage — see `IntegrationExample` at the bottom of this file.
+/// The stored properties are actors held as their concrete types, which is
+/// intentional for this facade: the composition seam is the `init` signature,
+/// where each collaborator can be replaced with any conforming actor in tests.
 public actor SDKIntegration: Sendable {
 
     private let config: FoundationModelsKitConfiguration
@@ -104,6 +92,9 @@ public actor SDKIntegration: Sendable {
     private let store: ConversationStore
     private let evaluation: EvaluationSuite
     private let regional: RegionalAvailability
+
+    /// Metrics active for this integration, filtered from `config.evaluationMetrics`.
+    private let activeMetrics: [any EvaluationMetric]
 
     // Capped ring-buffer of the last 20 operations.
     private var diagnosticLog: [DiagnosticEntry] = []
@@ -121,50 +112,45 @@ public actor SDKIntegration: Sendable {
         self.store = store
         self.evaluation = evaluation
         self.regional = regional
+
+        // Resolve the named metric strings to concrete metric instances once at
+        // init time so sendMessage() never does string comparison on the hot path.
+        let builtIn: [String: any EvaluationMetric] = [
+            "NonEmpty":         NonEmptyMetric(),
+            "Length":           LengthMetric(),
+            "ContainsKeywords": ContainsKeywordsMetric(keywords: []),
+        ]
+        self.activeMetrics = config.evaluationMetrics.compactMap { builtIn[$0] }
     }
 
     // MARK: - Primary API
 
-    /// Routes `request`, optionally evaluates the response, and stores both
-    /// turns in the conversation transcript.
+    /// Routes `request`, evaluates the response against the configured metrics,
+    /// and stores both turns in the conversation transcript.
     ///
-    /// - Returns: The model response and, when evaluation is configured,
-    ///   an `EvaluationResult`. The evaluation result is `nil` when
-    ///   `config.evaluationMetrics` is empty.
+    /// The user turn is stored after a successful response, so a failed request
+    /// never leaves a dangling entry in the transcript.
+    ///
+    /// - Returns: The model response and, when `config.evaluationMetrics` is
+    ///   non-empty, an `EvaluationResult`. `nil` when evaluation is disabled.
     public func sendMessage(
         _ request: ModelRequest
     ) async throws -> (response: ModelResponse, evaluation: EvaluationResult?) {
 
-        // 1. Optional region-awareness: resolve the current region and log the
-        //    best available tier (does not mutate the request for now).
-        var resolvedTier: ModelTier? = nil
-        if config.regionAwareness {
-            let region = await regional.currentRegion()
-            resolvedTier = await regional.bestTierFor(region: region)
-        }
+        // 1. Optional region-awareness — derive the best available tier for telemetry.
+        let resolvedTier: ModelTier? = config.regionAwareness
+            ? await regional.bestTierFor(region: regional.currentRegion())
+            : await router.resolvedTier(for: request)
 
-        // 2. Auto-compact the conversation if the profile requests it and
-        //    the transcript is approaching the token budget.
+        // 2. Auto-compact before adding the new turn so the budget check is accurate.
         if config.profile.autoCompact {
-            let needsCompact = await store.shouldCompact(maxTokens: config.profile.maxContextTokens)
-            if needsCompact {
-                // Route compaction through the same router so it obeys the
-                // same privacy and tier constraints as regular requests.
-                // ConversationStore.compact needs a LanguageModelProviding,
-                // so we bridge through the router's on-device model via a thin wrapper.
-                try await store.compact(using: RouterBridge(router: router), maxTokens: config.profile.maxContextTokens)
+            if await store.shouldCompact(maxTokens: config.profile.maxContextTokens) {
+                // ModelRouter now conforms to LanguageModelProviding directly.
+                try await store.compact(using: router, maxTokens: config.profile.maxContextTokens)
             }
         }
 
-        // 3. Store the user turn before routing so it's present even if the
-        //    model call throws.
-        await store.addEntry(ConversationEntry(
-            role: "user",
-            content: request.content,
-            toolsUsed: request.tools
-        ))
-
-        // 4. Route the request.
+        // 3. Route the request. Store turns only on success to prevent dangling entries.
         let response: ModelResponse
         do {
             response = try await router.routeRequest(request)
@@ -173,22 +159,23 @@ public actor SDKIntegration: Sendable {
             throw error
         }
 
-        // 5. Evaluate the response (nil when no metrics are configured).
+        // 4. Evaluate using only the metrics named in config.
         let evalResult: EvaluationResult?
-        if !config.evaluationMetrics.isEmpty {
-            let id = UUID().uuidString
-            evalResult = await evaluation.evaluate(response: response, responseID: id)
+        if !activeMetrics.isEmpty {
+            let filteredSuite = EvaluationSuite(metrics: activeMetrics)
+            evalResult = await filteredSuite.evaluate(
+                response: response,
+                responseID: UUID().uuidString
+            )
         } else {
             evalResult = nil
         }
 
-        // 6. Store the assistant turn.
-        await store.addEntry(ConversationEntry(
-            role: "assistant",
-            content: response.content
-        ))
+        // 5. Commit both turns to the store now that we have a successful response.
+        await store.addEntry(ConversationEntry(role: "user", content: request.content, toolsUsed: request.tools))
+        await store.addEntry(ConversationEntry(role: "assistant", content: response.content))
 
-        // 7. Append diagnostic entry.
+        // 6. Diagnostics.
         log(request: request, tier: resolvedTier, response: response, evalResult: evalResult, error: nil)
 
         return (response, evalResult)
@@ -196,10 +183,22 @@ public actor SDKIntegration: Sendable {
 
     // MARK: - Diagnostics
 
-    /// Returns a human-readable summary of the last N operations.
+    /// Human-readable summary of the last N operations.
     public func diagnostics() -> String {
         guard !diagnosticLog.isEmpty else { return "No operations recorded." }
         return diagnosticLog.map { $0.formatted() }.joined(separator: "\n\n")
+    }
+
+    // MARK: - Transcript forwarding
+
+    /// Full conversation transcript as plain text.
+    public func transcript() async -> String {
+        await store.transcript()
+    }
+
+    /// Number of stored conversation turns.
+    public func entryCount() async -> Int {
+        await store.entryCount
     }
 
     // MARK: - Private helpers
@@ -212,18 +211,15 @@ public actor SDKIntegration: Sendable {
         error: Error?
     ) {
         guard config.loggingEnabled else { return }
-
-        let snippet: (String) -> String = { String($0.prefix(80)) }
-
+        let snip: (String) -> String = { String($0.prefix(80)) }
         let entry = DiagnosticEntry(
             timestamp: Date(),
-            requestSnippet: snippet(request.content),
+            requestSnippet: snip(request.content),
             tier: tier,
-            responseSnippet: response.map { snippet($0.content) } ?? "",
+            responseSnippet: response.map { snip($0.content) } ?? "",
             evaluationPassed: evalResult?.overallPassed,
             errorDescription: error?.localizedDescription
         )
-
         diagnosticLog.append(entry)
         if diagnosticLog.count > maxLogEntries {
             diagnosticLog.removeFirst(diagnosticLog.count - maxLogEntries)
@@ -231,30 +227,14 @@ public actor SDKIntegration: Sendable {
     }
 }
 
-// MARK: - ConversationStore forwarding
-
-// SDKIntegration wraps ConversationStore internally, but callers sometimes
-// need to read the transcript directly (e.g. to display history in a UI).
-extension SDKIntegration {
-    /// Full conversation transcript as plain text.
-    public func transcript() async -> String {
-        await store.transcript()
-    }
-
-    /// Number of stored conversation turns.
-    public func entryCount() async -> Int {
-        await store.entryCount
-    }
-}
-
 // MARK: - Integration example
 
-/// Illustrates how to assemble the full stack.
-/// This type is intentionally never instantiated — it exists as living
-/// documentation that can be copy-pasted into an app's DI layer.
+/// Living documentation for assembling the full stack.
+/// Never instantiated — exists purely so Quick Help and package doc renderers
+/// can surface the example inline.
 ///
 /// ```swift
-/// // 1. Choose a routing profile.
+/// // 1. Choose a profile.
 /// let profile = DynamicProfileBuilder()
 ///     .withName("myApp")
 ///     .withRoutingStrategy(.adaptive)
@@ -263,14 +243,14 @@ extension SDKIntegration {
 ///     .withPrivacySensitivity(.medium)
 ///     .build()
 ///
-/// // 2. Wire up backends (replace MockLanguageModel with real conformers).
+/// // 2. Wire backends (swap MockLanguageModel for real conformers in production).
 /// let onDevice = MockLanguageModel()
 /// let router   = ModelRouter(onDevice: onDevice)
 ///
 /// // 3. Build supporting actors.
-/// let store      = ConversationStore()
-/// let suite      = EvaluationSuite(metrics: [NonEmptyMetric(), LengthMetric()])
-/// let regional   = RegionalAvailability()
+/// let store    = ConversationStore()
+/// let suite    = EvaluationSuite(metrics: [NonEmptyMetric(), LengthMetric()])
+/// let regional = RegionalAvailability()
 ///
 /// // 4. Assemble the facade.
 /// let config = FoundationModelsKitConfiguration(
@@ -294,10 +274,10 @@ extension SDKIntegration {
 ///     )
 ///     print(response.content)
 ///     if let eval = evalResult, !eval.overallPassed {
-///         print("Quality gate failed:", eval.scores.map(\.details))
+///         print("Quality gate failed:", eval.scores.compactMap(\.details))
 ///     }
 /// } catch LanguageModelError.unavailable {
-///     print("No model backend is reachable right now.")
+///     print("No backend reachable.")
 /// } catch {
 ///     print("Unexpected error:", error)
 /// }

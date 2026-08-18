@@ -1,20 +1,19 @@
 // RegionalAvailability.swift
-// Tracks which model backends are reachable from a given deployment region,
-// and selects the best available tier for a request.
+// Tracks which model backends are reachable from a given deployment region
+// and selects the best tier for a request given a routing strategy.
 
 // MARK: - Region
 
 /// A coarse geographic region used to gate backend availability.
 ///
-/// The `.global` case is used when no region-specific record exists or when
-/// running in a context where region cannot be determined (e.g. on-device
-/// with no network, simulator, unit tests).
+/// `.global` is the safe fallback when region cannot be determined (e.g.
+/// simulator, offline, unit tests).
 public enum Region: String, Sendable, Codable, CaseIterable {
-    case usEast   = "us-east"
-    case usWest   = "us-west"
-    case eu       = "eu"
-    case apac     = "apac"
-    case global   = "global"
+    case usEast = "us-east"
+    case usWest = "us-west"
+    case eu     = "eu"
+    case apac   = "apac"
+    case global = "global"
 }
 
 // MARK: - ModelAvailability
@@ -22,21 +21,19 @@ public enum Region: String, Sendable, Codable, CaseIterable {
 /// Snapshot of which backends are accessible and how fast they respond in
 /// a particular region.
 public struct ModelAvailability: Sendable, Codable {
-    /// The region this record applies to.
     public var region: Region
 
-    /// Whether the on-device model can be loaded (always `true` when hardware
-    /// supports it, regardless of region).
+    /// On-device inference is available (hardware-dependent, never network-gated).
     public var onDeviceAvailable: Bool
 
-    /// Whether Apple Private Cloud Compute is reachable from this region.
+    /// Apple Private Cloud Compute is reachable from this region.
     public var pccAvailable: Bool
 
-    /// Whether the configured third-party API is reachable from this region.
+    /// The configured third-party API is reachable from this region.
     public var thirdPartyAvailable: Bool
 
-    /// Round-trip latency to the best available remote backend, in milliseconds.
-    /// `nil` when only the on-device model is accessible.
+    /// Round-trip latency to the best available *remote* backend in milliseconds.
+    /// `nil` when only the on-device model is reachable.
     public var latency: Int?
 
     public init(
@@ -57,13 +54,14 @@ public struct ModelAvailability: Sendable, Codable {
 // MARK: - Sensible defaults
 
 extension ModelAvailability {
-    /// On-device is universally available; remote backends use conservative defaults.
+    /// Conservative per-region baseline.
+    /// On-device is always `true`; remote backends reflect realistic availability.
     public static let defaults: [Region: ModelAvailability] = [
-        .global:  ModelAvailability(region: .global,  onDeviceAvailable: true, pccAvailable: false, thirdPartyAvailable: true,  latency: 300),
-        .usEast:  ModelAvailability(region: .usEast,  onDeviceAvailable: true, pccAvailable: true,  thirdPartyAvailable: true,  latency: 60),
-        .usWest:  ModelAvailability(region: .usWest,  onDeviceAvailable: true, pccAvailable: true,  thirdPartyAvailable: true,  latency: 80),
-        .eu:      ModelAvailability(region: .eu,      onDeviceAvailable: true, pccAvailable: true,  thirdPartyAvailable: false, latency: 120),
-        .apac:    ModelAvailability(region: .apac,    onDeviceAvailable: true, pccAvailable: false, thirdPartyAvailable: true,  latency: 200),
+        .global: ModelAvailability(region: .global, onDeviceAvailable: true, pccAvailable: false, thirdPartyAvailable: true,  latency: 300),
+        .usEast: ModelAvailability(region: .usEast, onDeviceAvailable: true, pccAvailable: true,  thirdPartyAvailable: true,  latency: 60),
+        .usWest: ModelAvailability(region: .usWest, onDeviceAvailable: true, pccAvailable: true,  thirdPartyAvailable: true,  latency: 80),
+        .eu:     ModelAvailability(region: .eu,     onDeviceAvailable: true, pccAvailable: true,  thirdPartyAvailable: false, latency: 120),
+        .apac:   ModelAvailability(region: .apac,   onDeviceAvailable: true, pccAvailable: false, thirdPartyAvailable: true,  latency: 200),
     ]
 }
 
@@ -74,16 +72,13 @@ extension ModelAvailability {
 /// Usage:
 /// ```swift
 /// let registry = RegionalAvailability()
-/// let region = await registry.currentRegion()
-/// let tier = await registry.bestTierFor(region: region)  // e.g. .pcc
+/// let region   = await registry.currentRegion()
+/// let tier     = await registry.bestRemoteTierFor(region: region)  // .pcc or .thirdParty
 /// ```
 public actor RegionalAvailability: Sendable {
 
-    // Keyed by region for O(1) lookup and O(1) updates.
     private var availabilities: [Region: ModelAvailability]
 
-    /// Initialise with an explicit set of availability records.
-    /// Any region not covered falls back to the `.global` entry at query time.
     public init(availabilities: [ModelAvailability] = Array(ModelAvailability.defaults.values)) {
         self.availabilities = Dictionary(
             uniqueKeysWithValues: availabilities.map { ($0.region, $0) }
@@ -92,31 +87,42 @@ public actor RegionalAvailability: Sendable {
 
     // MARK: - Queries
 
-    /// Returns the availability record for `region`, or `nil` if none is
-    /// registered (and no `.global` fallback exists).
+    /// Returns the availability record for `region`, falling back to `.global`.
     public func availability(for region: Region) -> ModelAvailability? {
         availabilities[region] ?? availabilities[.global]
     }
 
-    /// Returns the highest-capability tier available in `region`.
+    /// Returns the **best remote tier** available in `region` (PCC > third-party),
+    /// or `nil` when no remote backend is reachable.
     ///
-    /// Priority: on-device > PCC > third-party.
-    /// Returns `nil` when no backend is available at all.
+    /// On-device is intentionally excluded: it is always available and callers
+    /// use this to decide *whether* to escalate beyond on-device, not as a
+    /// tiebreaker. Use `availability(for:).onDeviceAvailable` for that check.
+    public func bestRemoteTierFor(region: Region) -> ModelTier? {
+        guard let record = availability(for: region) else { return nil }
+        if record.pccAvailable        { return .pcc }
+        if record.thirdPartyAvailable { return .thirdParty }
+        return nil
+    }
+
+    /// Returns the highest-capability tier available in `region` including on-device.
+    ///
+    /// Priority: PCC > third-party > on-device (capability order).
+    /// Returns `nil` only when the region has zero backends — which should not
+    /// happen in practice given on-device is always true.
     public func bestTierFor(region: Region) -> ModelTier? {
         guard let record = availability(for: region) else { return nil }
-
-        // On-device is always preferred — no latency, no data leaves the device.
-        if record.onDeviceAvailable { return .onDevice }
-        if record.pccAvailable      { return .pcc }
+        if record.pccAvailable        { return .pcc }
         if record.thirdPartyAvailable { return .thirdParty }
+        if record.onDeviceAvailable   { return .onDevice }
         return nil
     }
 
     /// Returns the region the current process is considered to be running in.
     ///
-    /// This implementation returns `.global` as a safe placeholder.
-    /// In production, replace with a network-based region lookup or a value
-    /// injected from the host application's configuration.
+    /// Currently returns `.global` as a safe placeholder. Production callers
+    /// should inject a resolved region at construction time or via
+    /// `updateAvailability(_:)` after a network-based lookup.
     public func currentRegion() -> Region {
         .global
     }
@@ -124,7 +130,6 @@ public actor RegionalAvailability: Sendable {
     // MARK: - Mutations
 
     /// Inserts or replaces the availability record for a region.
-    /// Useful for dynamic updates pushed from a configuration service.
     public func updateAvailability(_ availability: ModelAvailability) {
         availabilities[availability.region] = availability
     }
