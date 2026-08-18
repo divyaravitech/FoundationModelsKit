@@ -11,7 +11,7 @@ import Foundation
 // MARK: - Entry
 
 /// A single turn in a conversation — either a user message or a model reply.
-public struct ConversationEntry: Sendable, Codable {
+public struct ConversationEntry: Sendable, Codable, Equatable {
     /// `"user"` or `"assistant"`.
     public var role: String
 
@@ -74,6 +74,26 @@ public actor ConversationStore: Sendable {
     public func removeLastEntry() {
         guard !entries.isEmpty else { return }
         entries.removeLast()
+    }
+
+    /// Removes all entries, resetting the conversation to empty.
+    public func clear() {
+        entries = []
+    }
+
+    // MARK: - Persistence
+
+    /// Encodes the transcript to JSON and writes it to `url`.
+    public func save(to url: URL) throws {
+        let data = try JSONEncoder().encode(entries)
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Replaces the current transcript with entries decoded from `url`.
+    /// Throws if the file is missing or malformed.
+    public func load(from url: URL) throws {
+        let data = try Data(contentsOf: url)
+        entries = try JSONDecoder().decode([ConversationEntry].self, from: data)
     }
 
     /// Returns the full conversation formatted as plain text.

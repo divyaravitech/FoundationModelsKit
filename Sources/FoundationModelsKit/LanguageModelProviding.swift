@@ -12,13 +12,37 @@ import Foundation
 /// Conformers include on-device models, Private Cloud Compute relays,
 /// third-party API wrappers, and test mocks.
 public protocol LanguageModelProviding: Sendable {
+    /// Sends a request and returns the complete response.
     func sendMessage(request: ModelRequest) async throws -> ModelResponse
+
+    /// Streams the response token-by-token as an `AsyncThrowingStream<String, Error>`.
+    ///
+    /// A default implementation is provided that calls `sendMessage` and yields
+    /// the full content as a single chunk. Backends that support native streaming
+    /// (e.g. Anthropic SSE, Apple FoundationModels) should override this.
+    func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error>
+}
+
+public extension LanguageModelProviding {
+    func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let response = try await sendMessage(request: request)
+                    continuation.yield(response.content)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Request
 
 /// Everything a caller needs to express a single inference turn.
-public struct ModelRequest: Sendable, Codable {
+public struct ModelRequest: Sendable, Codable, Equatable, Hashable {
     /// The user-facing text prompt or continuation.
     public var content: String
 
@@ -49,7 +73,7 @@ public struct ModelRequest: Sendable, Codable {
 // MARK: - Response
 
 /// The model's reply for a single inference turn.
-public struct ModelResponse: Sendable, Codable {
+public struct ModelResponse: Sendable, Codable, Equatable {
     /// The generated text.
     public var content: String
 
@@ -69,7 +93,7 @@ public struct ModelResponse: Sendable, Codable {
 
 // MARK: - Token Usage
 
-public struct TokenUsage: Sendable, Codable {
+public struct TokenUsage: Sendable, Codable, Equatable {
     public var inputTokens: Int
     public var outputTokens: Int
     /// Tokens served from the prompt cache (subset of inputTokens).
@@ -88,7 +112,7 @@ public struct TokenUsage: Sendable, Codable {
 // MARK: - Enums
 
 /// Which deployment tier handles the request.
-public enum ModelTier: String, Sendable, Codable, CaseIterable {
+public enum ModelTier: String, Sendable, Codable, CaseIterable, Hashable {
     /// Apple Neural Engine / Core ML — stays entirely on device.
     case onDevice
     /// Apple Private Cloud Compute — leaves the device but never reaches
@@ -100,7 +124,11 @@ public enum ModelTier: String, Sendable, Codable, CaseIterable {
 
 /// Caller-declared sensitivity of the request payload.
 /// The router uses this to enforce data-residency constraints.
-public enum PrivacySensitivity: String, Sendable, Codable, CaseIterable {
+public enum PrivacySensitivity: String, Sendable, Codable, CaseIterable, Hashable, Comparable {
+    private var order: Int {
+        switch self { case .low: 0; case .medium: 1; case .high: 2 }
+    }
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.order < rhs.order }
     case low
     case medium
     case high
@@ -108,7 +136,11 @@ public enum PrivacySensitivity: String, Sendable, Codable, CaseIterable {
 
 /// Caller-declared reasoning complexity required for the task.
 /// Simple tasks can stay on-device; complex tasks may need a larger model.
-public enum TaskComplexity: String, Sendable, Codable, CaseIterable {
+public enum TaskComplexity: String, Sendable, Codable, CaseIterable, Hashable, Comparable {
+    private var order: Int {
+        switch self { case .simple: 0; case .medium: 1; case .complex: 2 }
+    }
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.order < rhs.order }
     case simple
     case medium
     case complex

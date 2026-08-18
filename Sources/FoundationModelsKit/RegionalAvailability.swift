@@ -1,4 +1,5 @@
 // RegionalAvailability.swift
+import Foundation
 // Tracks which model backends are reachable from a given deployment region
 // and selects the best tier for a request given a routing strategy.
 
@@ -8,7 +9,7 @@
 ///
 /// `.global` is the safe fallback when region cannot be determined (e.g.
 /// simulator, offline, unit tests).
-public enum Region: String, Sendable, Codable, CaseIterable {
+public enum Region: String, Sendable, Codable, CaseIterable, Hashable {
     case usEast = "us-east"
     case usWest = "us-west"
     case eu     = "eu"
@@ -118,13 +119,26 @@ public actor RegionalAvailability: Sendable {
         return nil
     }
 
-    /// Returns the region the current process is considered to be running in.
+    /// Returns the region inferred from the device's current locale/timezone.
     ///
-    /// Currently returns `.global` as a safe placeholder. Production callers
-    /// should inject a resolved region at construction time or via
-    /// `updateAvailability(_:)` after a network-based lookup.
+    /// Mapping is coarse (timezone → region) and is a best-effort guess.
+    /// Override by calling `updateAvailability(_:)` with a server-resolved record.
     public func currentRegion() -> Region {
-        .global
+        let tz = TimeZone.current.identifier
+        switch true {
+        case tz.hasPrefix("America/New_York"), tz.hasPrefix("America/Toronto"),
+             tz.hasPrefix("America/Chicago"), tz.hasPrefix("America/Detroit"):
+            return .usEast
+        case tz.hasPrefix("America/Los_Angeles"), tz.hasPrefix("America/Vancouver"),
+             tz.hasPrefix("America/Denver"), tz.hasPrefix("America/Phoenix"):
+            return .usWest
+        case tz.hasPrefix("Europe/"):
+            return .eu
+        case tz.hasPrefix("Asia/"), tz.hasPrefix("Australia/"), tz.hasPrefix("Pacific/"):
+            return .apac
+        default:
+            return .global
+        }
     }
 
     // MARK: - Mutations
