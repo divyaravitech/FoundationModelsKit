@@ -38,10 +38,16 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
         do {
             let session = LanguageModelSession()
             let result = try await session.respond(to: request.content)
+            // Apple's FoundationModels framework does not expose token counts,
+            // so we estimate from character length. TokenUsage.isEstimated is
+            // set to true — never use these figures for billing.
             return ModelResponse(
                 content: result.content,
                 stopReason: "end_turn",
-                usage: TokenUsage(inputTokens: 0, outputTokens: 0)
+                usage: .estimated(
+                    promptChars: request.content.count,
+                    completionChars: result.content.count
+                )
             )
         } catch {
             throw LanguageModelError.unavailable

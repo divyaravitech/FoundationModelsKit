@@ -107,6 +107,27 @@ public struct TokenUsage: Sendable, Codable, Equatable {
 
     /// Net new tokens billed (excludes cache hits).
     public var billableInputTokens: Int { inputTokens - cachedInputTokens }
+
+    /// `true` when these counts were estimated rather than reported by the
+    /// backend. On-device models do not currently expose exact token counts,
+    /// so `OnDeviceLanguageModel` returns estimates flagged with this property.
+    ///
+    /// Do not use estimated counts for billing or quota enforcement.
+    public var isEstimated: Bool = false
+
+    /// Builds a `TokenUsage` from character counts using the standard
+    /// ~4-characters-per-token heuristic for English text.
+    ///
+    /// Used by backends that do not report exact counts. The result is always
+    /// marked `isEstimated == true`.
+    public static func estimated(promptChars: Int, completionChars: Int) -> TokenUsage {
+        var usage = TokenUsage(
+            inputTokens: Swift.max(1, promptChars / 4),
+            outputTokens: Swift.max(1, completionChars / 4)
+        )
+        usage.isEstimated = true
+        return usage
+    }
 }
 
 // MARK: - Enums

@@ -2,7 +2,7 @@
 
 A privacy-first Swift SDK for routing language model requests across on-device (Apple Intelligence), Private Cloud Compute, and third-party backends — with automatic context management, streaming, evaluation, and retries.
 
-[![CI](https://github.com/YOUR_USERNAME/FoundationModelsKit/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/FoundationModelsKit/actions/workflows/ci.yml)
+[![CI](https://github.com/divyaravitech/FoundationModelsKit/actions/workflows/ci.yml/badge.svg)](https://github.com/divyaravitech/FoundationModelsKit/actions/workflows/ci.yml)
 [![Swift 6](https://img.shields.io/badge/Swift-6-orange.svg)](https://swift.org)
 [![Platforms](https://img.shields.io/badge/platforms-macOS%2015%20%7C%20iOS%2018%20%7C%20watchOS%2011%20%7C%20tvOS%2018%20%7C%20visionOS%202-blue.svg)](Package.swift)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](LICENSE)
@@ -30,7 +30,7 @@ FoundationModelsKit encodes that policy in one place — the `ModelRouter` — a
 ```swift
 // Package.swift
 dependencies: [
-    .package(url: "https://github.com/YOUR_USERNAME/FoundationModelsKit.git", from: "1.0.0")
+    .package(url: "https://github.com/divyaravitech/FoundationModelsKit.git", from: "1.0.0")
 ]
 ```
 
@@ -108,13 +108,19 @@ try await sdk.store.save(to: url)
 ## Backends
 
 ### OnDeviceLanguageModel
-Wraps Apple's `FoundationModels` framework. Available on Apple Intelligence-capable devices running macOS 15.1+ / iOS 18.1+.
+Wraps Apple's `FoundationModels` framework. Requires **macOS 26 / iOS 26+** on Apple Intelligence-capable hardware. The package itself builds on older OS versions — this backend simply throws `.unavailable` there, so you can ship one binary and fall back at runtime.
 
 ```swift
-// Check availability before instantiating
-guard OnDeviceLanguageModel.isAvailable else { /* fallback */ }
+guard OnDeviceLanguageModel.isAvailable else {
+    // Fall back to a cloud backend
+    return
+}
 let model = OnDeviceLanguageModel()
 ```
+
+> **Token counts are estimated.** Apple's framework does not expose exact token
+> usage, so this backend derives counts from character length and sets
+> `TokenUsage.isEstimated == true`. Never use those figures for billing.
 
 ### AnthropicLanguageModel
 URLSession-based wrapper for the Anthropic Messages API. No external dependencies.
