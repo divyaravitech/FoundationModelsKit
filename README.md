@@ -1,67 +1,113 @@
 # FoundationModelsKit
 
-A privacy-first Swift SDK for routing language model requests across on-device (Apple Intelligence), Private Cloud Compute, and third-party backends — with automatic context management, streaming, evaluation, and retries.
+**Apple gave us three tiers of language model inference and no policy layer. This is one.**
 
 [![CI](https://github.com/divyaravitech/FoundationModelsKit/actions/workflows/ci.yml/badge.svg)](https://github.com/divyaravitech/FoundationModelsKit/actions/workflows/ci.yml)
 [![Swift 6](https://img.shields.io/badge/Swift-6-orange.svg)](https://swift.org)
-[![Platforms](https://img.shields.io/badge/platforms-macOS%2015%20%7C%20iOS%2018%20%7C%20watchOS%2011%20%7C%20tvOS%2018%20%7C%20visionOS%202-blue.svg)](Package.swift)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20iOS%20%7C%20watchOS%20%7C%20tvOS%20%7C%20visionOS-blue.svg)](Package.swift)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](LICENSE)
 
 ---
 
-## Why FoundationModelsKit?
+## The problem
 
-Apple's ecosystem now has three tiers of language model inference. Choosing the right one — and switching gracefully when one isn't available — is boilerplate nobody wants to write twice:
+Your app can run a prompt on-device, on Apple's Private Cloud Compute, or on a third-party API. Each is a different privacy bargain:
 
-| Tier | Backend | Privacy | Capability |
-|------|---------|---------|------------|
-| On-device | Apple Intelligence (Neural Engine) | 🔒 Data never leaves device | Good for short, simple tasks |
-| PCC | Apple Private Cloud Compute | 🔒 Apple-only infrastructure | Better for complex tasks |
-| Third-party | Anthropic, OpenAI, etc. | ⚠️ External server | Highest capability |
+| | Where the data goes | Good for |
+|---|---|---|
+| **On-device** | Nowhere. Stays on the Neural Engine. | Short, simple tasks |
+| **PCC** | Apple's servers, never third-party | Complex tasks, Apple-trusted data |
+| **Third-party** | An external company's servers | Anything, highest capability |
 
-FoundationModelsKit encodes that policy in one place — the `ModelRouter` — and exposes a single `LanguageModelProviding` protocol so every backend is swappable with one line.
+So every app ends up writing the same logic: *is this prompt sensitive enough that it must stay local? is it too big for the on-device model? what do I do when PCC isn't reachable?* That logic gets scattered across call sites, and the privacy rule — the part that actually matters — becomes an `if` statement someone can forget.
+
+## The fix
+
+Declare how sensitive the request is. The router decides where it's allowed to run.
+
+```swift
+let response = try await router.sendMessage(
+    request: ModelRequest(
+        content: "Summarise my medical notes.",
+        privacySensitivity: .high,    // never leaves the device. no exceptions.
+        taskComplexity: .simple
+    )
+)
+```
+
+`.high` stays on-device regardless of size, complexity, or which backends are configured. There is no setting that overrides it — that's the whole point of the library.
+
+| `privacySensitivity` | Routing |
+|---|---|
+| `.high` | On-device **only** — never escalates, even if the task is too big for it |
+| `.medium` | On-device or PCC — never a third party |
+| `.low` | Full chain: on-device → PCC → third-party |
 
 ---
 
-## Installation
+## See it work
 
-**Swift Package Manager**
+```bash
+git clone https://github.com/divyaravitech/FoundationModelsKit.git
+cd FoundationModelsKit/Examples/ChatDemo && swift run ChatDemo
+```
+
+```
+1. Same prompt, three privacy levels
+────────────────────────────────────
+  high    → 🔒 on-device
+  medium  → ☁️  private cloud compute
+  low     → ☁️  private cloud compute
+
+  Note: .high stayed on-device despite being large and complex.
+
+4. Automatic retry
+──────────────────
+  attempt 1 failed
+  attempt 2 failed
+  attempt 3 succeeded
+
+5. Conversation compaction
+──────────────────────────
+  entries before: 12
+  entries after:  6 (oldest turns summarised, 5 most recent kept)
+```
+
+No API key or Apple Intelligence hardware needed — [see the demo source](Examples/ChatDemo/Sources/ChatDemo/main.swift).
+
+---
+
+## Install
 
 ```swift
-// Package.swift
 dependencies: [
     .package(url: "https://github.com/divyaravitech/FoundationModelsKit.git", from: "1.0.0")
 ]
 ```
 
-Or add it in Xcode: **File → Add Package Dependencies…** and paste the repo URL.
+Or in Xcode: **File → Add Package Dependencies…**
 
----
-
-## Quick Start
+## Quick start
 
 ```swift
 import FoundationModelsKit
 
-// 1. Pick a backend
-let onDevice = OnDeviceLanguageModel()           // Apple Intelligence
-// let cloud = AnthropicLanguageModel(config: AnthropicConfiguration(apiKey: "sk-ant-…"))
-
-// 2. Build a router
-let router = ModelRouter(onDevice: onDevice)     // add pcc: / thirdParty: when available
-
-// 3. Send a message
-let request = ModelRequest(
-    content: "Summarise this meeting note in three bullets.",
-    privacySensitivity: .high,    // stays on-device
-    taskComplexity: .simple
+let router = ModelRouter(
+    onDevice: OnDeviceLanguageModel(),
+    thirdParty: AnthropicLanguageModel(
+        config: AnthropicConfiguration(
+            apiKey: ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]!
+        )
+    )
 )
 
-let response = try await router.sendMessage(request: request)
+let response = try await router.sendMessage(
+    request: ModelRequest(content: "Write a haiku about Swift.", privacySensitivity: .low)
+)
 print(response.content)
 ```
 
-### With streaming
+**Streaming** — works on every backend, including those without native streaming:
 
 ```swift
 for try await chunk in router.streamMessage(request: request) {
@@ -69,187 +115,109 @@ for try await chunk in router.streamMessage(request: request) {
 }
 ```
 
-### With automatic retries
+**Retries** — exponential backoff on transient failures:
 
 ```swift
 let robust = RetryingLanguageModel(wrapped: router, policy: .default)
-let response = try await robust.sendMessage(request: request)
 ```
 
-### Full SDK facade (router + conversation + evaluation)
+**Conversation with automatic compaction:**
 
 ```swift
-let sdk = SDKIntegration(
-    config: FoundationModelsKitConfiguration(
-        profile: .balanced,
-        evaluationMetrics: ["NonEmpty", "Length"],
-        regionAwareness: true,
-        loggingEnabled: true
-    ),
-    router: router,
-    store: ConversationStore(),
-    evaluation: EvaluationSuite(metrics: [NonEmptyMetric(), LengthMetric()]),
-    regional: RegionalAvailability()
-)
+let store = ConversationStore()
+await store.addEntry(ConversationEntry(role: "user", content: "Hello"))
 
-let (response, evalResult) = try await sdk.sendMessage(request)
-
-if let eval = evalResult, !eval.overallPassed {
-    print("Quality gate failed:", eval.scores.compactMap(\.details))
+if await store.shouldCompact(maxTokens: 4096) {
+    try await store.compact(using: router, maxTokens: 4096)
 }
 
-// Persist the conversation
-let url = FileManager.default.temporaryDirectory.appendingPathComponent("session.json")
-try await sdk.store.save(to: url)
+try await store.save(to: sessionURL)   // survives app restarts
+```
+
+**Quality gates on every response:**
+
+```swift
+let suite = EvaluationSuite(metrics: [
+    NonEmptyMetric(),
+    LengthMetric(min: 20, max: 2000),
+    ContainsKeywordsMetric(keywords: ["summary"]),
+])
+
+let result = await suite.evaluate(response: response, responseID: "turn-1")
+if !result.overallPassed { /* retry, log, or fall back */ }
 ```
 
 ---
 
 ## Backends
 
-### OnDeviceLanguageModel
-Wraps Apple's `FoundationModels` framework. Requires **macOS 26 / iOS 26+** on Apple Intelligence-capable hardware. The package itself builds on older OS versions — this backend simply throws `.unavailable` there, so you can ship one binary and fall back at runtime.
+**`OnDeviceLanguageModel`** — Apple Intelligence via the `FoundationModels` framework. Requires macOS 26 / iOS 26+ on supported hardware. The package builds on older OS versions; this backend throws `.unavailable` there, so you ship one binary and fall back at runtime.
 
 ```swift
-guard OnDeviceLanguageModel.isAvailable else {
-    // Fall back to a cloud backend
-    return
-}
-let model = OnDeviceLanguageModel()
+guard OnDeviceLanguageModel.isAvailable else { /* use a cloud backend */ }
 ```
 
-> **Token counts are estimated.** Apple's framework does not expose exact token
-> usage, so this backend derives counts from character length and sets
-> `TokenUsage.isEstimated == true`. Never use those figures for billing.
+> Token counts are **estimated** from character length — Apple's framework doesn't expose exact figures. `TokenUsage.isEstimated` is set to `true`; don't bill against it.
 
-### AnthropicLanguageModel
-URLSession-based wrapper for the Anthropic Messages API. No external dependencies.
+**`AnthropicLanguageModel`** — Anthropic Messages API over `URLSession`, with SSE streaming. No external dependencies.
 
-```swift
-let model = AnthropicLanguageModel(
-    config: AnthropicConfiguration(
-        apiKey: ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]!,
-        model: "claude-opus-5-20251101",
-        maxTokens: 1024
-    )
-)
-```
+**`MockLanguageModel`** — deterministic actor for tests and SwiftUI previews. Records call count and last request.
 
-### MockLanguageModel
-Deterministic test double. Use in unit tests and SwiftUI previews.
-
-```swift
-let mock = MockLanguageModel { _ in
-    ModelResponse(content: "Fake reply", stopReason: "end_turn",
-                  usage: TokenUsage(inputTokens: 5, outputTokens: 3))
-}
-```
-
----
-
-## Privacy Routing
-
-The `ModelRouter` enforces data-residency constraints before any other heuristic:
-
-| `privacySensitivity` | Routing rule |
-|----------------------|--------------|
-| `.high` | On-device **only** — never escalates |
-| `.medium` | On-device for small/simple requests; PCC otherwise; never third-party |
-| `.low` | Full fallback chain: on-device → PCC → third-party |
-
----
-
-## Conversation Management
-
-`ConversationStore` tracks the full turn history and automatically compacts it when the context window fills up:
-
-```swift
-let store = ConversationStore()
-await store.addEntry(ConversationEntry(role: "user", content: "Hello"))
-
-// Auto-compact when approaching the token budget
-if await store.shouldCompact(maxTokens: 4096) {
-    try await store.compact(using: router, maxTokens: 4096)
-}
-
-// Persist across app launches
-try await store.save(to: sessionURL)
-try await store.load(from: sessionURL)
-```
-
----
-
-## Evaluation
-
-Plug in quality gates that run against every response:
-
-```swift
-let suite = EvaluationSuite(metrics: [
-    NonEmptyMetric(),
-    LengthMetric(min: 20, max: 2000),
-    ContainsKeywordsMetric(keywords: ["summary", "action items"]),
-    MyCustomMetric(),         // conform to EvaluationMetric
-])
-
-let result = await suite.evaluate(response: response, responseID: "turn-1")
-print(result.overallPassed, result.averageScore)
-```
-
-Custom metric:
-
-```swift
-struct ToxicityMetric: EvaluationMetric, Sendable {
-    let name = "Toxicity"
-    func evaluate(response: ModelResponse) async -> EvaluationScore {
-        let safe = !response.content.contains("badword")
-        return EvaluationScore(metricName: name, score: safe ? 1.0 : 0.0, passed: safe)
-    }
-}
-```
+Writing your own is one method — see [CONTRIBUTING.md](CONTRIBUTING.md#adding-a-backend).
 
 ---
 
 ## Architecture
 
 ```
-FoundationModelsKit
-├── Protocol layer
-│   └── LanguageModelProviding   (sendMessage + streamMessage)
-├── Backends
-│   ├── OnDeviceLanguageModel    (Apple FoundationModels)
-│   ├── AnthropicLanguageModel   (Anthropic Messages API)
-│   └── MockLanguageModel        (test double)
-├── Routing
-│   ├── ModelRouter              (privacy-first dispatch)
-│   ├── RetryingLanguageModel    (exponential backoff wrapper)
-│   ├── DynamicProfile           (routing + context config)
-│   └── RegionalAvailability     (per-region tier selection)
-├── Conversation
-│   └── ConversationStore        (transcript + compaction + persistence)
-├── Evaluation
-│   └── EvaluationSuite          (pluggable metrics, concurrent)
-└── Facade
-    └── SDKIntegration           (wires everything together)
+Protocol layer
+  └── LanguageModelProviding        sendMessage + streamMessage
+Backends
+  ├── OnDeviceLanguageModel         Apple FoundationModels
+  ├── AnthropicLanguageModel        Anthropic Messages API
+  └── MockLanguageModel             test double
+Routing
+  ├── ModelRouter                   privacy-first dispatch
+  ├── RetryingLanguageModel         exponential backoff
+  ├── DynamicProfile                routing + context config
+  └── RegionalAvailability          per-region tier selection
+Conversation
+  └── ConversationStore             transcript, compaction, persistence
+Evaluation
+  └── EvaluationSuite               pluggable metrics, run concurrently
+Facade
+  └── SDKIntegration                wires it all together
 ```
 
-**Design rule:** no concrete type imports another concrete type. All coupling goes through `LanguageModelProviding`.
+**One rule:** no concrete type imports another concrete type. All coupling goes through protocols — which is why adding a backend touches zero existing files.
+
+Swift 6 strict concurrency throughout. No `@unchecked Sendable` anywhere.
+
+---
+
+## Roadmap
+
+| | Status |
+|---|---|
+| Protocol layer, routing, conversation, evaluation | ✅ Shipped |
+| Streaming, retries, persistence | ✅ Shipped |
+| On-device + Anthropic backends | ✅ Shipped |
+| **PCC backend** | 🚧 Tier exists in the router; needs an implementation |
+| **Tool calling** | 📋 Planned — `ModelRequest.tools` is currently a name hint only |
+| **OpenAI / Gemini backends** | 📋 Planned — [good first issue](CONTRIBUTING.md#good-first-issues) |
+| **Real tokenizer** | 📋 Planned — replacing the 4-chars-per-token estimate |
+| **SwiftUI view layer** | 📋 Planned — `@Observable` chat view model |
+
+Want one of these? [Contributions welcome](CONTRIBUTING.md) — several are tagged as good first issues.
 
 ---
 
 ## Requirements
 
-| Platform | Minimum version |
-|----------|-----------------|
-| macOS | 15.0 |
-| iOS | 18.0 |
-| watchOS | 11.0 |
-| tvOS | 18.0 |
-| visionOS | 2.0 |
+Swift 6 · macOS 15+ · iOS 18+ · watchOS 11+ · tvOS 18+ · visionOS 2+
 
-Swift 6 strict concurrency is enforced across the entire module.
-
----
+*(The on-device backend additionally requires macOS 26 / iOS 26 and Apple Intelligence hardware. Everything else works on the base versions.)*
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
