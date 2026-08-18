@@ -47,8 +47,16 @@ let response = try await router.sendMessage(
 
 ## See it work
 
+A SwiftUI app where the banner updates live as you move the privacy control — watch a long message escalate to the cloud at `.low`, then refuse to leave the device at `.high`:
+
 ```bash
 git clone https://github.com/divyaravitech/FoundationModelsKit.git
+cd FoundationModelsKit/Examples/PrivacyChat && swift run PrivacyChat
+```
+
+Or the CLI walkthrough of all six features:
+
+```bash
 cd FoundationModelsKit/Examples/ChatDemo && swift run ChatDemo
 ```
 
