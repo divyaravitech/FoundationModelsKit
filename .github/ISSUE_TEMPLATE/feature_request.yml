@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest a capability or an API change
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: >
+        Describe the situation you are in, not the solution you have in mind.
+        This usually leads somewhere better than the first idea.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would the API look like?
+      description: Sketch a call site, even roughly.
+      render: swift
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area
+      options:
+        - New backend (LanguageModelProviding)
+        - New evaluation metric
+        - Routing behaviour
+        - Conversation management
+        - Documentation
+        - Something else
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to open a PR for this

@@ -201,6 +201,27 @@ public actor SDKIntegration: Sendable {
         await store.entryCount
     }
 
+    /// Writes the conversation transcript to `url` as JSON.
+    ///
+    /// The file is written in plaintext. Place it somewhere appropriate for the
+    /// sensitivity of the conversation — for example a Data Protection–enabled
+    /// directory on iOS.
+    public func saveTranscript(to url: URL) async throws {
+        try await store.save(to: url)
+    }
+
+    /// Replaces the conversation transcript with the contents of `url`.
+    ///
+    /// - Throws: if the file is missing or cannot be decoded.
+    public func loadTranscript(from url: URL) async throws {
+        try await store.load(from: url)
+    }
+
+    /// Clears the conversation transcript, keeping configuration and backends.
+    public func clearTranscript() async {
+        await store.clear()
+    }
+
     // MARK: - Private helpers
 
     private func log(

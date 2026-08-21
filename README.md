@@ -165,6 +165,26 @@ let result = await suite.evaluate(response: response, responseID: "turn-1")
 if !result.overallPassed { /* retry, log, or fall back */ }
 ```
 
+**Or all of it behind one facade** — routing, compaction, evaluation, and diagnostics in a single call:
+
+```swift
+let sdk = SDKIntegration(
+    config: FoundationModelsKitConfiguration(
+        profile: .balanced,
+        evaluationMetrics: ["NonEmpty", "Length"]
+    ),
+    router: router,
+    store: ConversationStore(),
+    evaluation: EvaluationSuite(metrics: [NonEmptyMetric(), LengthMetric()]),
+    regional: RegionalAvailability()
+)
+
+let (response, evaluation) = try await sdk.sendMessage(request)
+
+try await sdk.saveTranscript(to: sessionURL)
+print(await sdk.diagnostics())
+```
+
 ---
 
 ## Backends
@@ -235,6 +255,26 @@ Want one of these? [Contributions welcome](CONTRIBUTING.md) — several are tagg
 Swift 6 · macOS 15+ · iOS 18+ · watchOS 11+ · tvOS 18+ · visionOS 2+
 
 *(The on-device backend additionally requires macOS 26 / iOS 26 and Apple Intelligence hardware. Everything else works on the base versions.)*
+
+Zero dependencies. Swift 6 strict concurrency, no `@unchecked Sendable`.
+
+---
+
+## Documentation
+
+Full API reference and articles are published by Swift Package Index:
+**[swiftpackageindex.com/divyaravitech/FoundationModelsKit/documentation](https://swiftpackageindex.com/divyaravitech/FoundationModelsKit/documentation)**
+
+- [Getting Started](Sources/FoundationModelsKit/Documentation.docc/GettingStarted.md)
+- [Privacy Routing](Sources/FoundationModelsKit/Documentation.docc/PrivacyRouting.md) — how the router decides
+- [Custom Backends](Sources/FoundationModelsKit/Documentation.docc/CustomBackends.md) — conform your own model
+
+## Contributing
+
+Adding a backend is one method; adding an evaluation metric is one method. Neither requires touching core code — see [CONTRIBUTING.md](CONTRIBUTING.md), which lists issues scoped as good first contributions.
+
+- [Changelog](CHANGELOG.md)
+- [Security policy](SECURITY.md) — please report routing-guarantee bugs privately
 
 ## License
 

@@ -11,36 +11,55 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-and-test:
-    name: Swift ${{ matrix.swift }} on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            swift: "6.0"
-          - os: macos-15
-            swift: "6.1"
+  test:
+    name: Build & test
+    # macos-15 ships Xcode 16 / Swift 6. Older images default to Swift 5.10,
+    # which cannot parse this package's swift-tools-version: 6.0 manifest.
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app
-
       - name: Swift version
         run: swift --version
 
-      - name: Build
+      - name: Build (debug)
+        run: swift build
+
+      - name: Build (release)
         run: swift build -c release
 
       - name: Test
-        run: swift test --enable-code-coverage
+        run: swift test
 
-      - name: Upload coverage
-        if: matrix.os == 'macos-15' && matrix.swift == '6.1'
-        uses: codecov/codecov-action@v4
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: false
+  examples:
+    name: Build examples
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # The examples depend on the root package by path, so a breaking API
+      # change shows up here rather than in someone's clone.
+      - name: Build ChatDemo
+        working-directory: Examples/ChatDemo
+        run: swift build
+
+      - name: Build PrivacyChat
+        working-directory: Examples/PrivacyChat
+        run: swift build
+
+  docs:
+    name: Build documentation
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Catches broken DocC symbol links (``Foo``) and dead <doc:> references,
+      # which are otherwise only discovered after Swift Package Index builds.
+      - name: Generate DocC
+        run: |
+          swift package resolve
+          xcrun xcodebuild docbuild \
+            -scheme FoundationModelsKit \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath /tmp/docbuild

@@ -1,10 +1,30 @@
-.DS_Store
-/.build
+# Build artifacts
 .build/
-*.profraw
-/Packages
-xcuserdata/
 DerivedData/
+*.o
+*.dSYM/
+
+# Code coverage
+*.profraw
+*.profdata
+
+# Xcode
+xcuserdata/
+*.xcuserstate
 .swiftpm/configuration/registries.json
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+
+# SwiftPM
+/Packages
+Package.resolved
+
+# macOS
+.DS_Store
+
+# Credentials
 .netrc
+
+# Scratch — compiled probes and one-off scripts should never be committed
+/fmtest*
+/scratch/
+*.cast

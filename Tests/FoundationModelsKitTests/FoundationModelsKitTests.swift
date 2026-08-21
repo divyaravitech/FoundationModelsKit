@@ -388,3 +388,177 @@ actor AttemptCounter {
     let after = await registry.availability(for: .global)
     #expect(after?.thirdPartyAvailable == false)
 }
+
+// MARK: - SDKIntegration
+
+/// Builds a facade wired to a single mock backend.
+private func makeSDK(
+    handler: (@Sendable (ModelRequest) async throws -> ModelResponse)? = nil,
+    metrics: [String] = ["NonEmpty"]
+) -> (sdk: SDKIntegration, backend: MockLanguageModel) {
+    let backend = MockLanguageModel(responseHandler: handler)
+    let sdk = SDKIntegration(
+        config: FoundationModelsKitConfiguration(
+            profile: .balanced,
+            evaluationMetrics: metrics,
+            regionAwareness: false,
+            loggingEnabled: true
+        ),
+        router: ModelRouter(onDevice: backend),
+        store: ConversationStore(),
+        evaluation: EvaluationSuite(metrics: [NonEmptyMetric()]),
+        regional: RegionalAvailability()
+    )
+    return (sdk, backend)
+}
+
+@Test func sdkStoresBothTurnsOnSuccess() async throws {
+    let (sdk, _) = makeSDK()
+    _ = try await sdk.sendMessage(
+        ModelRequest(content: "Hello", privacySensitivity: .high, taskComplexity: .simple)
+    )
+    // One user turn plus one assistant turn.
+    #expect(await sdk.entryCount() == 2)
+}
+
+@Test func sdkLeavesNoDanglingEntryWhenRoutingFails() async {
+    let (sdk, _) = makeSDK(handler: { _ in throw LanguageModelError.unavailable })
+
+    await #expect(throws: LanguageModelError.unavailable) {
+        try await sdk.sendMessage(
+            ModelRequest(content: "Will fail", privacySensitivity: .high, taskComplexity: .simple)
+        )
+    }
+    // A failed request must not leave a half-written transcript, otherwise a
+    // retry would duplicate the user's message.
+    #expect(await sdk.entryCount() == 0)
+}
+
+@Test func sdkRetryAfterFailureDoesNotDuplicateUserTurn() async throws {
+    actor Gate {
+        private var failed = false
+        func shouldFail() -> Bool {
+            if failed { return false }
+            failed = true
+            return true
+        }
+    }
+    let gate = Gate()
+    let (sdk, _) = makeSDK(handler: { _ in
+        if await gate.shouldFail() { throw LanguageModelError.unavailable }
+        return ModelResponse(content: "OK", stopReason: "end_turn",
+                             usage: TokenUsage(inputTokens: 1, outputTokens: 1))
+    })
+
+    let request = ModelRequest(content: "Same message", privacySensitivity: .high, taskComplexity: .simple)
+    _ = try? await sdk.sendMessage(request)
+    _ = try await sdk.sendMessage(request)
+
+    #expect(await sdk.entryCount() == 2)
+    let transcript = await sdk.transcript()
+    // "Same message" should appear exactly once.
+    #expect(transcript.components(separatedBy: "Same message").count - 1 == 1)
+}
+
+@Test func sdkReturnsEvaluationWhenMetricsConfigured() async throws {
+    let (sdk, _) = makeSDK(metrics: ["NonEmpty"])
+    let (_, evaluation) = try await sdk.sendMessage(
+        ModelRequest(content: "Hi", privacySensitivity: .high, taskComplexity: .simple)
+    )
+    #expect(evaluation != nil)
+    #expect(evaluation?.overallPassed == true)
+}
+
+@Test func sdkSkipsEvaluationWhenNoMetricsConfigured() async throws {
+    let (sdk, _) = makeSDK(metrics: [])
+    let (_, evaluation) = try await sdk.sendMessage(
+        ModelRequest(content: "Hi", privacySensitivity: .high, taskComplexity: .simple)
+    )
+    #expect(evaluation == nil)
+}
+
+@Test func sdkIgnoresUnknownMetricNames() async throws {
+    let (sdk, _) = makeSDK(metrics: ["NotARealMetric"])
+    let (_, evaluation) = try await sdk.sendMessage(
+        ModelRequest(content: "Hi", privacySensitivity: .high, taskComplexity: .simple)
+    )
+    // Unknown names resolve to nothing, so evaluation is skipped rather than crashing.
+    #expect(evaluation == nil)
+}
+
+@Test func sdkDiagnosticsRecordOperations() async throws {
+    let (sdk, _) = makeSDK()
+    _ = try await sdk.sendMessage(
+        ModelRequest(content: "Hello", privacySensitivity: .high, taskComplexity: .simple)
+    )
+    let report = await sdk.diagnostics()
+    #expect(report.contains("tier=\(ModelTier.onDevice.rawValue)"))
+    #expect(!report.contains("No operations recorded"))
+}
+
+@Test func sdkDiagnosticsRecordFailures() async {
+    let (sdk, _) = makeSDK(handler: { _ in throw LanguageModelError.unavailable })
+    _ = try? await sdk.sendMessage(
+        ModelRequest(content: "Nope", privacySensitivity: .high, taskComplexity: .simple)
+    )
+    let report = await sdk.diagnostics()
+    #expect(report.contains("ERROR"))
+}
+
+@Test func sdkTranscriptPersistenceRoundtrip() async throws {
+    let (sdk, _) = makeSDK()
+    _ = try await sdk.sendMessage(
+        ModelRequest(content: "Persist me", privacySensitivity: .high, taskComplexity: .simple)
+    )
+
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sdk-transcript-\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    try await sdk.saveTranscript(to: url)
+
+    let (restored, _) = makeSDK()
+    try await restored.loadTranscript(from: url)
+
+    #expect(await restored.entryCount() == 2)
+    #expect(await restored.transcript().contains("Persist me"))
+}
+
+@Test func sdkClearTranscriptEmptiesStore() async throws {
+    let (sdk, _) = makeSDK()
+    _ = try await sdk.sendMessage(
+        ModelRequest(content: "Hello", privacySensitivity: .high, taskComplexity: .simple)
+    )
+    await sdk.clearTranscript()
+    #expect(await sdk.entryCount() == 0)
+}
+
+@Test func sdkHighSensitivityNeverLeavesDevice() async throws {
+    let onDevice = MockLanguageModel()
+    let pcc = MockLanguageModel()
+    let thirdParty = MockLanguageModel()
+
+    let sdk = SDKIntegration(
+        config: FoundationModelsKitConfiguration(
+            profile: .cloudFirst,          // deliberately biased toward the cloud
+            evaluationMetrics: [],
+            regionAwareness: false,
+            loggingEnabled: false
+        ),
+        router: ModelRouter(onDevice: onDevice, pcc: pcc, thirdParty: thirdParty),
+        store: ConversationStore(),
+        evaluation: EvaluationSuite(metrics: []),
+        regional: RegionalAvailability()
+    )
+
+    // Large and complex — every heuristic argues for escalation.
+    _ = try await sdk.sendMessage(ModelRequest(
+        content: String(repeating: "sensitive ", count: 200),
+        privacySensitivity: .high,
+        taskComplexity: .complex
+    ))
+
+    #expect(await onDevice.callCount == 1)
+    #expect(await pcc.callCount == 0)
+    #expect(await thirdParty.callCount == 0)
+}
