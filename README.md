@@ -7,6 +7,10 @@
 [![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20iOS%20%7C%20watchOS%20%7C%20tvOS%20%7C%20visionOS-blue.svg)](Package.swift)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](LICENSE)
 
+![Routing the same message at three privacy levels](docs/privacy-routing.gif)
+
+*The same message, three privacy levels. Only the control changes — the routing follows.*
+
 ---
 
 ## The problem
@@ -53,6 +57,12 @@ A SwiftUI app where the banner updates live as you move the privacy control — 
 git clone https://github.com/divyaravitech/FoundationModelsKit.git
 cd FoundationModelsKit/Examples/PrivacyChat && swift run PrivacyChat
 ```
+
+| `.high` — stays local | `.low` — escalates |
+|---|---|
+| ![On-device](docs/screenshot-high.png) | ![Private Cloud Compute](docs/screenshot-low.png) |
+
+Identical message and complexity in both. Only the privacy control differs.
 
 Or the CLI walkthrough of all six features:
 

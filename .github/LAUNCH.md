@@ -132,49 +132,49 @@ system rather than convention.*
 
 ---
 
-## Recording a demo GIF
+## Visual assets
 
-The single highest-value promotional asset. Install the tooling:
+Already built and committed — see `docs/`:
+
+- `docs/privacy-routing.gif` — the routing banner cycling through three
+  privacy levels on an identical message. Embedded at the top of the README.
+- `docs/screenshot-high.png` / `docs/screenshot-low.png` — the before/after
+  pair, shown side by side in the "See it work" section.
+
+Regenerate any time the UI changes:
+
+```bash
+cd Examples/PrivacyChat && bash scripts/capture-screenshots.sh
+```
+
+For social posts that need a short video rather than a GIF, record the app
+with QuickTime (File → New Screen Recording) and drag the sensitivity control
+back and forth. The moment worth capturing is switching from Low to High on
+the long medical-notes prompt and watching the banner refuse to escalate.
+
+**Still worth doing:** a terminal GIF of the CLI demo, which shows the retry
+and compaction features the SwiftUI app does not surface:
 
 ```bash
 brew install asciinema agg
-```
-
-Record the CLI demo:
-
-```bash
 cd Examples/ChatDemo
 asciinema rec demo.cast -c "swift run ChatDemo"
-agg demo.cast demo.gif --theme monokai --font-size 15
+agg demo.cast ../../docs/cli-demo.gif --theme monokai --font-size 15
 ```
-
-Then add to the top of the README:
-
-```markdown
-![Demo](docs/demo.gif)
-```
-
-For the SwiftUI app, use QuickTime (File → New Screen Recording), then convert:
-
-```bash
-ffmpeg -i recording.mov -vf "fps=12,scale=800:-1:flags=lanczos" -loop 0 privacychat.gif
-```
-
-Keep it under ~8 seconds and under 5 MB. The money shot is switching the
-sensitivity control from Low to High on a long message and watching the banner
-refuse to escalate.
 
 ---
 
 ## Ordering
 
 1. Tag `1.0.0` and push
-2. Record both GIFs, add to README
-3. Swift Package Index (already submitted — verify docs built)
-4. Swift Forums post
-5. r/swift + r/iOSProgramming
-6. iOS Dev Weekly email
-7. Show HN last — it benefits from the repo already having a few stars
+2. Swift Package Index (already submitted — verify docs built)
+3. Swift Forums post
+4. r/swift + r/iOSProgramming
+5. iOS Dev Weekly email
+6. Show HN last — it benefits from the repo already having a few stars
 
 Don't do all of these the same day. Space them over 1–2 weeks so each has time
 to generate discussion.
+
+The GIF is already in the README, so any of these can go out immediately —
+the repo no longer needs someone to clone it before they understand what it does.

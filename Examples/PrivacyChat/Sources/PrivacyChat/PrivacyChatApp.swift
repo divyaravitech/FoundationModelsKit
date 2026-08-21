@@ -8,12 +8,28 @@ import FoundationModelsKit
 
 @main
 struct PrivacyChatApp: App {
+    // An SPM executable has no .app bundle, so AppKit treats it as a background
+    // agent: the window never comes to the front. This promotes it to a regular
+    // app on launch so `swift run PrivacyChat` behaves like a normal app.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+
     var body: some Scene {
         WindowGroup("PrivacyChat — FoundationModelsKit") {
             ContentView()
                 .frame(minWidth: 620, minHeight: 560)
         }
         .windowResizability(.contentSize)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
 }
 
@@ -50,6 +66,39 @@ final class ChatViewModel {
             pcc:        DemoBackend(tier: "Private Cloud Compute"),
             thirdParty: DemoBackend(tier: "third-party API")
         )
+
+        // Set PRIVACYCHAT_DEMO=1 to preload a conversation that exercises all
+        // three tiers — used for documentation screenshots.
+        if ProcessInfo.processInfo.environment["PRIVACYCHAT_DEMO"] == "1" {
+            seedDemoConversation()
+        }
+    }
+
+    private func seedDemoConversation() {
+        messages = [
+            .init(role: "user",
+                  text: "What's on my calendar tomorrow?",
+                  tier: .onDevice, sensitivity: .high),
+            .init(role: "assistant",
+                  text: "Handled by on-device. In a real app this would be the model's reply.",
+                  tier: .onDevice, sensitivity: nil),
+            .init(role: "user",
+                  text: "Draft a detailed project retrospective covering our Q3 launch, the incidents we hit, and what we'd change — aim for several paragraphs.",
+                  tier: .pcc, sensitivity: .medium),
+            .init(role: "assistant",
+                  text: "Handled by Private Cloud Compute. In a real app this would be the model's reply.",
+                  tier: .pcc, sensitivity: nil),
+        ]
+        complexity = .complex
+        draft = "Summarise my medical notes from the last six months, including every medication change and the reasoning behind each one."
+
+        // PRIVACYCHAT_DEMO_SENSITIVITY lets a screenshot script capture the
+        // same draft at different privacy levels for before/after comparisons.
+        switch ProcessInfo.processInfo.environment["PRIVACYCHAT_DEMO_SENSITIVITY"] {
+        case "low":    sensitivity = .low
+        case "medium": sensitivity = .medium
+        default:       sensitivity = .high
+        }
     }
 
     /// Recomputes the routing preview whenever the draft or controls change.
