@@ -10,6 +10,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege: CI only reads the repository. Security scanners and many
+# org policies flag workflows that inherit the default write-capable token.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Build & test

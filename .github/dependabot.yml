@@ -1,0 +1,18 @@
+version: 2
+
+updates:
+  # The package itself has no Swift dependencies, so only GitHub Actions
+  # need updating. Keeping actions current is the main supply-chain surface
+  # this repository has.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+    groups:
+      actions:
+        patterns:
+          - "*"
