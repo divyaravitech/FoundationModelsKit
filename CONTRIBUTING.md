@@ -100,7 +100,7 @@ Match the surrounding code. Notably:
 Issues tagged [`good first issue`](https://github.com/divyaravitech/FoundationModelsKit/labels/good%20first%20issue) are scoped to be completable without deep knowledge of the codebase. Current candidates:
 
 - **OpenAI backend** — mirror `AnthropicLanguageModel`, different request shape
-- **PCC backend** — the routing tier exists but has no implementation
+- ~~**PCC backend**~~ — blocked upstream; Apple has not exposed a public PCC API ([#2](https://github.com/divyaravitech/FoundationModelsKit/issues/2))
 - **`JSONValidityMetric`** — check that a response parses as valid JSON
 - **`SemanticSimilarityMetric`** — compare against an expected answer
 - **Token counting** — replace the 4-chars-per-token heuristic with a real tokenizer

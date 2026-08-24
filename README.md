@@ -222,13 +222,15 @@ Swift 6 strict concurrency throughout. No `@unchecked Sendable` anywhere.
 | Protocol layer, routing, conversation, evaluation | ✅ Shipped |
 | Streaming, retries, persistence | ✅ Shipped |
 | On-device + Anthropic backends | ✅ Shipped |
-| **PCC backend** | 🚧 Tier exists in the router; needs an implementation |
-| **Tool calling** | 📋 Planned — `ModelRequest.tools` is currently a name hint only |
-| **OpenAI / Gemini backends** | 📋 Planned — [good first issue](CONTRIBUTING.md#good-first-issues) |
-| **Real tokenizer** | 📋 Planned — replacing the 4-chars-per-token estimate |
+| **PCC backend** | ⛔️ [Blocked upstream](https://github.com/divyaravitech/FoundationModelsKit/issues/2) — Apple has not exposed a public PCC API |
+| **Tool calling** | 📋 [Planned](https://github.com/divyaravitech/FoundationModelsKit/issues/7) — `ModelRequest.tools` is currently a name hint only |
+| **OpenAI / Gemini backends** | 📋 [Good first issue](https://github.com/divyaravitech/FoundationModelsKit/issues/1) |
+| **Real tokenizer** | 📋 [Good first issue](https://github.com/divyaravitech/FoundationModelsKit/issues/5) — replacing the 4-chars-per-token estimate |
 | **SwiftUI view layer** | 📋 Planned — `@Observable` chat view model |
 
-Want one of these? [Contributions welcome](CONTRIBUTING.md) — several are tagged as good first issues.
+Want one of these? [Contributions welcome](CONTRIBUTING.md) — several are tagged good first issue.
+
+> **On PCC:** the `.pcc` tier exists in the router and is fully tested, so you can supply your own PCC-backed conformer. But the kit cannot ship one: `PrivateCloudComputeLanguageModel` is present in Apple's framework binary yet absent from the public interface, so it does not compile against. See [#2](https://github.com/divyaravitech/FoundationModelsKit/issues/2) for the symbol-level evidence.
 
 ---
 
