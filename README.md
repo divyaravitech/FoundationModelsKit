@@ -50,7 +50,6 @@ let response = try await router.sendMessage(
 ---
 
 ## See it work
-![CLI demo](docs/cli-demo.gif)
 
 A SwiftUI app where the banner updates live as you move the privacy control — watch a long message escalate to the cloud at `.low`, then refuse to leave the device at `.high`:
 
