@@ -23,7 +23,7 @@ jobs:
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Swift version
         run: swift --version
@@ -41,7 +41,7 @@ jobs:
     name: Build examples
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The examples depend on the root package by path, so a breaking API
       # change shows up here rather than in someone's clone.
@@ -57,7 +57,7 @@ jobs:
     name: Build documentation
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Catches broken DocC symbol links (``Foo``) and dead <doc:> references,
       # which are otherwise only discovered after Swift Package Index builds.
