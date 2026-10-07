@@ -39,13 +39,13 @@ print(response.content)
 The router takes up to three backends. It only escalates to a cloud tier when the request's ``PrivacySensitivity`` permits it:
 
 ```swift
+guard let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] else {
+    throw ConfigError.missingAPIKey
+}
+
 let router = ModelRouter(
     onDevice: OnDeviceLanguageModel(),
-    thirdParty: AnthropicLanguageModel(
-        config: AnthropicConfiguration(
-            apiKey: ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]!
-        )
-    )
+    thirdParty: AnthropicLanguageModel(config: AnthropicConfiguration(apiKey: apiKey))
 )
 ```
 

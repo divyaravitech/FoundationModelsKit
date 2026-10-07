@@ -82,7 +82,7 @@ private struct DiagnosticEntry: Sendable {
 /// 1. Region check (optional) — resolves the best available tier
 /// 2. Auto-compaction of the conversation store
 /// 3. Routing via `ModelRouter`
-/// 4. Evaluation via `EvaluationSuite` filtered to `config.evaluationMetrics`
+/// 4. Evaluation via the injected `EvaluationSuite`
 /// 5. Transcript management in `ConversationStore`
 /// 6. Diagnostic logging
 ///

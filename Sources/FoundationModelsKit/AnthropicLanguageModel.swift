@@ -21,11 +21,22 @@ public struct AnthropicConfiguration: Sendable {
     /// Base URL (override for proxies or test servers).
     public var baseURL: URL
 
+    /// The production Anthropic API endpoint.
+    ///
+    /// Built from a string literal that is known-valid at compile time, so the
+    /// unwrap cannot fail at runtime. Kept in one place so no `!` appears in a
+    /// default argument, where it would read as an invitation to pass one.
+    public static let defaultBaseURL = URL(string: "https://api.anthropic.com")!
+
+    /// Model IDs are complete as published — never append a date suffix.
+    /// `claude-opus-5-5-20260401` is not a valid ID and fails at request time.
+    public static let defaultModel = "claude-opus-5-5"
+
     public init(
         apiKey: String,
-        model: String = "claude-opus-5-5",
+        model: String = AnthropicConfiguration.defaultModel,
         maxTokens: Int = 1024,
-        baseURL: URL = URL(string: "https://api.anthropic.com")!
+        baseURL: URL = AnthropicConfiguration.defaultBaseURL
     ) {
         self.apiKey = apiKey
         self.model = model
@@ -51,11 +62,10 @@ extension AnthropicConfiguration: CustomStringConvertible, CustomDebugStringConv
 /// `URLSession` is already thread-safe, so this is a `struct` — no actor overhead.
 ///
 /// ```swift
-/// let anthropic = AnthropicLanguageModel(
-///     config: AnthropicConfiguration(
-///         apiKey: ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]!
-///     )
-/// )
+/// guard let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] else {
+///     throw ConfigError.missingAPIKey   // fail with a clear message, never force-unwrap
+/// }
+/// let anthropic = AnthropicLanguageModel(config: AnthropicConfiguration(apiKey: apiKey))
 /// let response = try await anthropic.sendMessage(
 ///     request: ModelRequest(content: "Hello!", privacySensitivity: .low)
 /// )
@@ -131,11 +141,29 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
         return urlRequest
     }
 
+    /// Status codes worth trying again: rate limiting, and any server-side
+    /// fault including Anthropic's 529 "overloaded".
+    ///
+    /// These map to ``LanguageModelError/unavailable`` so that
+    /// ``RetryingLanguageModel`` backs off and retries. Mapping them to
+    /// ``AnthropicError/apiError(statusCode:body:)`` instead — as an earlier
+    /// version did for everything except 529 — meant a rate-limited request
+    /// failed outright rather than being retried.
+    /// `internal` rather than `private` so the retry classification is pinned
+    /// by tests — it is not part of the public API.
+    static func isTransient(statusCode: Int) -> Bool {
+        statusCode == 408 || statusCode == 429 || statusCode >= 500
+    }
+
     private func validate(response: URLResponse, data: Data?) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard (200..<300).contains(http.statusCode) else {
+            if Self.isTransient(statusCode: http.statusCode) {
+                throw LanguageModelError.unavailable
+            }
+            // 4xx other than 408/429 is a client error — retrying sends the
+            // same bad request again, so surface it with the server's detail.
             let detail = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
-            if http.statusCode == 529 { throw LanguageModelError.unavailable }
             throw AnthropicError.apiError(statusCode: http.statusCode, body: detail)
         }
     }

@@ -134,14 +134,21 @@ public struct TokenUsage: Sendable, Codable, Equatable {
     /// Net new tokens billed (excludes cache hits).
     public var billableInputTokens: Int { inputTokens - cachedInputTokens }
 
-    /// Builds a `TokenUsage` from character counts using the ~4-characters-per-token
-    /// heuristic for English text, flagged `isEstimated == true`.
+    /// Characters per token, averaged over English prose.
     ///
-    /// Used by backends that do not report exact counts.
+    /// Materially wrong for code, CJK text, and heavy punctuation — replacing
+    /// this with a real tokenizer is tracked in issue #5. Anything derived from
+    /// it is marked ``isEstimated``.
+    public static let charactersPerToken = 4
+
+    /// Builds a `TokenUsage` from character counts, flagged `isEstimated == true`.
+    ///
+    /// Used by backends that do not report exact counts. Never returns zero —
+    /// callers divide by these values when budgeting context.
     public static func estimated(promptChars: Int, completionChars: Int) -> TokenUsage {
         TokenUsage(
-            inputTokens: Swift.max(1, promptChars / 4),
-            outputTokens: Swift.max(1, completionChars / 4),
+            inputTokens: Swift.max(1, promptChars / charactersPerToken),
+            outputTokens: Swift.max(1, completionChars / charactersPerToken),
             isEstimated: true
         )
     }

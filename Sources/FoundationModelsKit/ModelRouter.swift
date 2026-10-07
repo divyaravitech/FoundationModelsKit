@@ -89,12 +89,28 @@ public actor ModelRouter: LanguageModelProviding {
         }
     }
 
-    // MARK: - Private helpers
+    // MARK: - Eligibility heuristic
 
+    /// Longest prompt, in characters, still considered a good fit for the
+    /// on-device model.
+    ///
+    /// Deliberately conservative: the on-device model is the least capable
+    /// tier, so the cost of keeping a borderline prompt local is a weaker
+    /// answer, while the cost of escalating one unnecessarily is latency and
+    /// a wider data-exposure surface.
+    public static let onDeviceCharacterLimit = 500
+
+    /// Whether a request is a good fit for the on-device model, ignoring
+    /// privacy — `routeRequest(_:)` applies the privacy rules first.
+    ///
+    /// A request qualifies when all three hold: it is under
+    /// ``onDeviceCharacterLimit`` characters, it needs no tools (on-device
+    /// tool calling is not wired up — see issue #7), and it is declared
+    /// ``TaskComplexity/simple``.
     private func isOnDeviceEligible(_ request: ModelRequest) -> Bool {
-        let isSmall  = request.content.count < 500
-        let hasNoTools = request.tools?.isEmpty != false
+        let isSmall = request.content.count < Self.onDeviceCharacterLimit
+        let needsNoTools = request.tools?.isEmpty != false
         let isSimple = request.taskComplexity == .simple
-        return isSmall && hasNoTools && isSimple
+        return isSmall && needsNoTools && isSimple
     }
 }

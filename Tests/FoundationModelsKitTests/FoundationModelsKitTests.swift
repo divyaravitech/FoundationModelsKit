@@ -787,3 +787,32 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
         try await model.sendMessage(request: ModelRequest(content: "hi"))
     }
 }
+
+@Test func transientHTTPStatusesAreRetryable() {
+    // 429 and 5xx must map to .unavailable so RetryingLanguageModel backs off.
+    // An earlier version mapped only 529, so rate limits failed outright.
+    for code in [408, 429, 500, 502, 503, 529] {
+        #expect(AnthropicLanguageModel.isTransient(statusCode: code), "\(code) should be retryable")
+    }
+    for code in [400, 401, 403, 404, 422] {
+        #expect(!AnthropicLanguageModel.isTransient(statusCode: code), "\(code) must not be retried")
+    }
+}
+
+@Test func routerOnDeviceLimitIsRespected() async throws {
+    let onDevice = MockLanguageModel()
+    let pcc = MockLanguageModel()
+    let router = ModelRouter(onDevice: onDevice, pcc: pcc)
+
+    let justUnder = String(repeating: "x", count: ModelRouter.onDeviceCharacterLimit - 1)
+    _ = try await router.routeRequest(
+        ModelRequest(content: justUnder, privacySensitivity: .low, taskComplexity: .simple)
+    )
+    #expect(await onDevice.callCount == 1)
+
+    let atLimit = String(repeating: "x", count: ModelRouter.onDeviceCharacterLimit)
+    _ = try await router.routeRequest(
+        ModelRequest(content: atLimit, privacySensitivity: .low, taskComplexity: .simple)
+    )
+    #expect(await pcc.callCount == 1, "a prompt at the limit should escalate")
+}

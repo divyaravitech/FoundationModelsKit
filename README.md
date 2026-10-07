@@ -91,13 +91,13 @@ Or in Xcode: **File → Add Package Dependencies…**
 ```swift
 import FoundationModelsKit
 
+guard let apiKey = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"] else {
+    throw ConfigError.missingAPIKey
+}
+
 let router = ModelRouter(
     onDevice: OnDeviceLanguageModel(),
-    thirdParty: AnthropicLanguageModel(
-        config: AnthropicConfiguration(
-            apiKey: ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"]!
-        )
-    )
+    thirdParty: AnthropicLanguageModel(config: AnthropicConfiguration(apiKey: apiKey))
 )
 
 let response = try await router.sendMessage(
@@ -211,6 +211,8 @@ Facade
 **One rule:** no concrete type imports another concrete type. All coupling goes through protocols — which is why adding a backend touches zero existing files.
 
 Swift 6 strict concurrency throughout. No `@unchecked Sendable` anywhere.
+
+Design rationale and the invariants that must not regress: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---
 
