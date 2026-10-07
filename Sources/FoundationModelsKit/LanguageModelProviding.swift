@@ -1,9 +1,3 @@
-// LanguageModelProviding.swift
-// Core protocol and data types for FoundationModelsKit.
-//
-// Design: all types are Sendable + Codable so they can cross actor boundaries
-// and be serialized to disk or over the wire without extra conversion layers.
-
 import Foundation
 
 // MARK: - Core Protocol
@@ -36,9 +30,7 @@ public extension LanguageModelProviding {
                     continuation.finish(throwing: error)
                 }
             }
-            // Without this, a consumer that breaks out of the `for try await`
-            // loop early leaves the request running — and billing — in the
-            // background. Terminating the stream must cancel the work.
+            // An early break must not leave the request running.
             continuation.onTermination = { _ in task.cancel() }
         }
     }
@@ -51,14 +43,12 @@ public struct ModelRequest: Sendable, Codable, Equatable, Hashable {
     /// The user-facing text prompt or continuation.
     public var content: String
 
-    /// Names of tools this request would need.
+    /// Names of tools this request needs, used for routing.
     ///
-    /// - Warning: This is currently a **routing hint only** — no tool is
-    ///   executed, and no backend sends tool definitions to its provider.
-    ///   A non-empty value disqualifies the request from the on-device path,
-    ///   because on-device tool calling is not wired up yet.
-    ///   Real tool calling is tracked in issue #7; until it lands, do not
-    ///   expect a model to call anything named here.
+    /// A non-empty value keeps the request off the on-device path, which has
+    /// no tool support. Execution is separate: register the tools themselves
+    /// on the backend (`AnthropicLanguageModel(config:tools:)`), because a
+    /// `Tool` holds a closure and so cannot live in a `Codable` request.
     public var tools: [String]?
 
     /// How sensitive the payload is — used by the router to avoid sending
@@ -155,10 +145,8 @@ public struct TokenUsage: Sendable, Codable, Equatable {
 
     // MARK: Codable
 
-    // Hand-written so that persisted data stays readable as fields are added.
-    // Swift's synthesized `init(from:)` ignores property defaults and throws
-    // `keyNotFound`, which would make every previously saved transcript
-    // undecodable the moment a new field lands.
+    // Hand-written: synthesized Codable ignores defaults and throws on a
+    // missing key, breaking data saved before a field was added.
     private enum CodingKeys: String, CodingKey {
         case inputTokens, outputTokens, cachedInputTokens, isEstimated
     }
@@ -219,8 +207,11 @@ public enum LanguageModelError: LocalizedError, Equatable {
     /// The combined prompt + history exceeds the model's context window.
     case contextWindowExceeded
 
-    /// A tool name in `ModelRequest.tools` is not registered with this backend.
+    /// The model asked for a tool that is not registered with this backend.
     case toolNotSupported(String)
+
+    /// The model kept calling tools past the backend's turn limit.
+    case toolLoopLimitExceeded(turns: Int)
 
     public var errorDescription: String? {
         switch self {
@@ -230,6 +221,8 @@ public enum LanguageModelError: LocalizedError, Equatable {
             return "The request exceeds the model's context window limit."
         case .toolNotSupported(let name):
             return "Tool '\(name)' is not supported by this model backend."
+        case .toolLoopLimitExceeded(let turns):
+            return "The model kept requesting tools after \(turns) turns."
         }
     }
 }

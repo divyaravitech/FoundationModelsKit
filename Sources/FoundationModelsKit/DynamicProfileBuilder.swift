@@ -1,12 +1,3 @@
-// DynamicProfileBuilder.swift
-// Defines routing profiles and a fluent builder for creating them.
-//
-// A DynamicProfile tells the system how to route requests and manage
-// context windows for a given use-case (on-device only, cloud-first, etc.).
-
-// MARK: - RoutingStrategy
-
-/// Describes how the router should prioritise available backends.
 public enum RoutingStrategy: String, Sendable, Codable, CaseIterable {
     /// Always prefer the on-device model; never escalate.
     case preferOnDevice

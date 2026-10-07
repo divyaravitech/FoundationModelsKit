@@ -1,8 +1,3 @@
-// OnDeviceLanguageModel.swift
-// Wraps Apple's FoundationModels framework (available macOS 26 / iOS 26+).
-// Compiles on older targets — throws .unavailable at runtime when the
-// framework is absent or Apple Intelligence is not enabled on the device.
-
 import Foundation
 
 #if canImport(FoundationModels)
@@ -38,9 +33,7 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
         do {
             let session = LanguageModelSession()
             let result = try await session.respond(to: request.content)
-            // Apple's FoundationModels framework does not expose token counts,
-            // so we estimate from character length. TokenUsage.isEstimated is
-            // set to true — never use these figures for billing.
+            // The framework exposes no token counts, so these are estimates.
             return ModelResponse(
                 content: result.content,
                 stopReason: "end_turn",
@@ -69,7 +62,6 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
                     let session = LanguageModelSession()
                     var previous = ""
                     for try await snapshot in session.streamResponse(to: request.content) {
-                        // Stop generating as soon as the consumer stops reading.
                         try Task.checkCancellation()
                         // Yield only the delta since the last snapshot.
                         let full = snapshot.content

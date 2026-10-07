@@ -1,9 +1,3 @@
-// MockLanguageModel.swift
-// Deterministic test double for LanguageModelProviding.
-//
-// Use in unit tests and SwiftUI previews where a real model backend
-// would be too slow, require network access, or introduce flakiness.
-
 import Foundation
 
 /// A lightweight, actor-isolated fake that satisfies `LanguageModelProviding`.

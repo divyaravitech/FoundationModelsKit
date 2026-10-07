@@ -1,12 +1,3 @@
-// ModelRouter.swift
-// Routes requests to the appropriate language model backend.
-//
-// Privacy is enforced unconditionally before any heuristic:
-//   .high   → on-device only, never escalates
-//   .medium → on-device for simple/small requests, PCC otherwise
-//   .low    → full fallback chain (on-device → PCC → third-party)
-
-/// Routes requests to the appropriate language model based on privacy, complexity, and content size.
 public actor ModelRouter: LanguageModelProviding {
     private let onDeviceModel: any LanguageModelProviding
     private let pccModel: (any LanguageModelProviding)?
@@ -52,8 +43,7 @@ public actor ModelRouter: LanguageModelProviding {
             if let pcc = pccModel {
                 return try await pcc.sendMessage(request: request)
             }
-            // Fall back to on-device rather than leaking medium-sensitivity data
-            // to a third-party endpoint.
+            // On-device rather than a third party.
             return try await onDeviceModel.sendMessage(request: request)
 
         case .low:

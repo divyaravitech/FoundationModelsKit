@@ -1,7 +1,4 @@
-// RegionalAvailability.swift
 import Foundation
-// Tracks which model backends are reachable from a given deployment region
-// and selects the best tier for a request given a routing strategy.
 
 // MARK: - Region
 

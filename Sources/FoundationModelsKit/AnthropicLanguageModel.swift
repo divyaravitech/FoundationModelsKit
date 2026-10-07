@@ -1,7 +1,3 @@
-// AnthropicLanguageModel.swift
-// URLSession-based backend for the Anthropic Messages API.
-// No external dependencies — uses only Foundation.
-
 import Foundation
 
 // MARK: - Configuration
@@ -45,9 +41,7 @@ public struct AnthropicConfiguration: Sendable {
     }
 }
 
-// Redact the key from `print`, string interpolation, and `po` in the debugger.
-// Without this, logging a configuration — or a crash report capturing one —
-// exposes a live credential in plain text.
+// Keeps the key out of logs and crash reports.
 extension AnthropicConfiguration: CustomStringConvertible, CustomDebugStringConvertible {
     public var description: String {
         "AnthropicConfiguration(model: \(model), maxTokens: \(maxTokens), baseURL: \(baseURL), apiKey: <redacted>)"
@@ -74,19 +68,68 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
 
     private let config: AnthropicConfiguration
     private let session: URLSession
+    private let tools: ToolRegistry
 
-    public init(config: AnthropicConfiguration, session: URLSession = .shared) {
+    /// Maximum model turns in one tool-calling exchange, so a model that keeps
+    /// calling tools cannot loop forever.
+    public static let maxToolTurns = 8
+
+    public init(
+        config: AnthropicConfiguration,
+        tools: [any Tool] = [],
+        session: URLSession = .shared
+    ) {
         self.config = config
         self.session = session
+        self.tools = ToolRegistry(tools)
     }
 
     // MARK: - LanguageModelProviding
 
     public func sendMessage(request: ModelRequest) async throws -> ModelResponse {
-        let urlRequest = try makeRequest(for: request, stream: false)
-        let (data, response) = try await session.data(for: urlRequest)
-        try validate(response: response, data: data)
-        return try decode(data: data)
+        var messages: [[String: Any]] = [["role": "user", "content": request.content]]
+        var totalUsage = TokenUsage(inputTokens: 0, outputTokens: 0)
+
+        for _ in 0..<Self.maxToolTurns {
+            let urlRequest = try makeRequest(messages: messages, stream: false)
+            let (data, response) = try await session.data(for: urlRequest)
+            try validate(response: response, data: data)
+
+            let turn = try decode(data: data)
+            totalUsage = TokenUsage(
+                inputTokens: totalUsage.inputTokens + turn.response.usage.inputTokens,
+                outputTokens: totalUsage.outputTokens + turn.response.usage.outputTokens
+            )
+
+            guard !turn.toolCalls.isEmpty, !tools.isEmpty else {
+                return ModelResponse(
+                    content: turn.response.content,
+                    stopReason: turn.response.stopReason,
+                    usage: totalUsage
+                )
+            }
+
+            messages.append(["role": "assistant", "content": turn.rawAssistantContent])
+            messages.append(["role": "user", "content": try await results(for: turn.toolCalls)])
+        }
+
+        throw LanguageModelError.toolLoopLimitExceeded(turns: Self.maxToolTurns)
+    }
+
+    private func results(for calls: [ToolCall]) async throws -> [[String: Any]] {
+        var blocks: [[String: Any]] = []
+        for call in calls {
+            var block: [String: Any] = ["type": "tool_result", "tool_use_id": call.id]
+            do {
+                block["content"] = try await tools.run(call)
+            } catch {
+                // Report it so the model can recover rather than abandoning the turn.
+                block["content"] = "Error: \(error.localizedDescription)"
+                block["is_error"] = true
+            }
+            blocks.append(block)
+        }
+        return blocks
     }
 
     public func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
@@ -98,8 +141,6 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
                     try self.validate(response: response, data: nil)
 
                     for try await line in bytes.lines {
-                        // Cancellation closes the underlying connection rather
-                        // than draining a response nobody is reading.
                         try Task.checkCancellation()
                         guard line.hasPrefix("data: ") else { continue }
                         let payload = String(line.dropFirst(6))
@@ -123,6 +164,10 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
     // MARK: - Private helpers
 
     private func makeRequest(for request: ModelRequest, stream: Bool) throws -> URLRequest {
+        try makeRequest(messages: [["role": "user", "content": request.content]], stream: stream)
+    }
+
+    private func makeRequest(messages: [[String: Any]], stream: Bool) throws -> URLRequest {
         let url = config.baseURL.appendingPathComponent("v1/messages")
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = "POST"
@@ -133,9 +178,18 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
         var body: [String: Any] = [
             "model": config.model,
             "max_tokens": config.maxTokens,
-            "messages": [["role": "user", "content": request.content]],
+            "messages": messages,
         ]
         if stream { body["stream"] = true }
+        if !tools.isEmpty {
+            body["tools"] = tools.all.map { tool in
+                [
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.parameterSchema.foundationValue,
+                ]
+            }
+        }
 
         urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body)
         return urlRequest
@@ -161,23 +215,58 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
             if Self.isTransient(statusCode: http.statusCode) {
                 throw LanguageModelError.unavailable
             }
-            // 4xx other than 408/429 is a client error — retrying sends the
-            // same bad request again, so surface it with the server's detail.
+            // Client error: retrying would resend the same bad request.
             let detail = data.flatMap { String(data: $0, encoding: .utf8) } ?? ""
             throw AnthropicError.apiError(statusCode: http.statusCode, body: detail)
         }
     }
 
-    private func decode(data: Data) throws -> ModelResponse {
+    /// One model turn: the text, any tool calls, and the assistant content
+    /// echoed back verbatim on the next request.
+    private struct Turn {
+        let response: ModelResponse
+        let toolCalls: [ToolCall]
+        let rawAssistantContent: [[String: Any]]
+    }
+
+    private func decode(data: Data) throws -> Turn {
         let decoded = try JSONDecoder().decode(MessagesResponse.self, from: data)
-        let text = decoded.content.first(where: { $0.type == "text" })?.text ?? ""
-        return ModelResponse(
-            content: text,
-            stopReason: decoded.stopReason ?? "end_turn",
-            usage: TokenUsage(
-                inputTokens: decoded.usage.inputTokens,
-                outputTokens: decoded.usage.outputTokens
-            )
+
+        let text = decoded.content
+            .filter { $0.type == "text" }
+            .compactMap(\.text)
+            .joined(separator: "\n")
+
+        let calls: [ToolCall] = decoded.content.compactMap { block in
+            guard block.type == "tool_use", let id = block.id, let name = block.name else { return nil }
+            return ToolCall(id: id, name: name, arguments: block.input ?? .object([:]))
+        }
+
+        let raw: [[String: Any]] = decoded.content.map { block in
+            switch block.type {
+            case "tool_use":
+                return [
+                    "type": "tool_use",
+                    "id": block.id ?? "",
+                    "name": block.name ?? "",
+                    "input": (block.input ?? .object([:])).foundationValue,
+                ]
+            default:
+                return ["type": "text", "text": block.text ?? ""]
+            }
+        }
+
+        return Turn(
+            response: ModelResponse(
+                content: text,
+                stopReason: decoded.stopReason ?? "end_turn",
+                usage: TokenUsage(
+                    inputTokens: decoded.usage.inputTokens,
+                    outputTokens: decoded.usage.outputTokens
+                )
+            ),
+            toolCalls: calls,
+            rawAssistantContent: raw
         )
     }
 }
@@ -205,6 +294,9 @@ private struct MessagesResponse: Decodable {
     struct ContentBlock: Decodable {
         let type: String
         let text: String?
+        let id: String?
+        let name: String?
+        let input: JSONValue?
     }
     struct Usage: Decodable {
         let inputTokens: Int

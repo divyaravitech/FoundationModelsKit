@@ -1,7 +1,3 @@
-// SDKIntegration.swift
-// Facade that wires ModelRouter, ConversationStore, EvaluationSuite, and
-// RegionalAvailability behind a single async entry point.
-
 import Foundation
 
 // MARK: - Configuration
@@ -41,8 +37,7 @@ public struct FoundationModelsKitConfiguration: Sendable, Codable {
 
 // MARK: - Diagnostic entry
 
-// ISO8601DateFormatter is not Sendable, but is safe to read-only share after
-// initialisation. Marked nonisolated(unsafe) to satisfy strict concurrency.
+// Not Sendable, but only read after setup.
 private nonisolated(unsafe) let sharedISO8601Formatter: ISO8601DateFormatter = {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime]
@@ -117,10 +112,7 @@ public actor SDKIntegration: Sendable {
         self.evaluation = evaluation
         self.regional = regional
 
-        // The injected suite decides *which* metrics run; the config field only
-        // decides *whether* they run. An earlier version resolved metric names
-        // against a built-in table and ignored the injected suite entirely,
-        // which silently discarded any custom metric a caller passed in.
+        // The suite decides which metrics run; config only decides whether.
         self.isEvaluationEnabled = !config.evaluationMetrics.isEmpty
     }
 
@@ -138,20 +130,17 @@ public actor SDKIntegration: Sendable {
         _ request: ModelRequest
     ) async throws -> (response: ModelResponse, evaluation: EvaluationResult?) {
 
-        // 1. Optional region-awareness — derive the best available tier for telemetry.
         let resolvedTier: ModelTier? = config.regionAwareness
             ? await regional.bestTierFor(region: regional.currentRegion())
             : await router.resolvedTier(for: request)
 
-        // 2. Auto-compact before adding the new turn so the budget check is accurate.
+        // Compact before adding the new turn so the budget check is accurate.
         if config.profile.autoCompact {
             if await store.shouldCompact(maxTokens: config.profile.maxContextTokens) {
-                // ModelRouter now conforms to LanguageModelProviding directly.
                 try await store.compact(using: router, maxTokens: config.profile.maxContextTokens)
             }
         }
 
-        // 3. Route the request. Store turns only on success to prevent dangling entries.
         let response: ModelResponse
         do {
             response = try await router.routeRequest(request)
@@ -160,17 +149,14 @@ public actor SDKIntegration: Sendable {
             throw error
         }
 
-        // 4. Evaluate with the injected suite — the caller's metrics, including
-        //    any custom ones, which a names-based filter could never express.
         let evalResult: EvaluationResult? = isEvaluationEnabled
             ? await evaluation.evaluate(response: response, responseID: UUID().uuidString)
             : nil
 
-        // 5. Commit both turns to the store now that we have a successful response.
+        // Stored only on success, so a failure leaves no dangling turn.
         await store.addEntry(ConversationEntry(role: "user", content: request.content, toolsUsed: request.tools))
         await store.addEntry(ConversationEntry(role: "assistant", content: response.content))
 
-        // 6. Diagnostics.
         log(request: request, tier: resolvedTier, response: response, evalResult: evalResult, error: nil)
 
         return (response, evalResult)
@@ -242,64 +228,3 @@ public actor SDKIntegration: Sendable {
         }
     }
 }
-
-// MARK: - Integration example
-
-/// Living documentation for assembling the full stack.
-/// Never instantiated — exists purely so Quick Help and package doc renderers
-/// can surface the example inline.
-///
-/// ```swift
-/// // 1. Choose a profile.
-/// let profile = DynamicProfileBuilder()
-///     .withName("myApp")
-///     .withRoutingStrategy(.adaptive)
-///     .withMaxContextTokens(4096)
-///     .withAutoCompact(true)
-///     .withPrivacySensitivity(.medium)
-///     .build()
-///
-/// // 2. Wire backends (swap MockLanguageModel for real conformers in production).
-/// let onDevice = MockLanguageModel()
-/// let router   = ModelRouter(onDevice: onDevice)
-///
-/// // 3. Build supporting actors.
-/// let store    = ConversationStore()
-/// let suite    = EvaluationSuite(metrics: [NonEmptyMetric(), LengthMetric()])
-/// let regional = RegionalAvailability()
-///
-/// // 4. Assemble the facade.
-/// let config = FoundationModelsKitConfiguration(
-///     profile: profile,
-///     evaluationMetrics: ["NonEmpty", "Length"],
-///     regionAwareness: true,
-///     loggingEnabled: true
-/// )
-/// let sdk = SDKIntegration(
-///     config: config,
-///     router: router,
-///     store: store,
-///     evaluation: suite,
-///     regional: regional
-/// )
-///
-/// // 5. Send a message.
-/// do {
-///     let (response, evalResult) = try await sdk.sendMessage(
-///         ModelRequest(content: "Summarise the quarterly report.", privacySensitivity: .high)
-///     )
-///     print(response.content)
-///     if let eval = evalResult, !eval.overallPassed {
-///         print("Quality gate failed:", eval.scores.compactMap(\.details))
-///     }
-/// } catch LanguageModelError.unavailable {
-///     print("No backend reachable.")
-/// } catch {
-///     print("Unexpected error:", error)
-/// }
-///
-/// // 6. Inspect diagnostics.
-/// let report = await sdk.diagnostics()
-/// print(report)
-/// ```
-public enum IntegrationExample {}

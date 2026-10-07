@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Tool calling: `Tool`, `ToolRegistry`, `ToolCall`, and a `JSONValue` type for
+  schemas and arguments. `AnthropicLanguageModel(config:tools:)` sends tool
+  definitions and runs the multi-turn loop, capped at 8 turns.
+- `OpenAILanguageModel` for the Chat Completions API, with SSE streaming.
+- `TokenEstimating` with a character-class-aware default that no longer treats
+  CJK as a quarter-token per character. `ConversationStore` takes one.
+- `ConversationStore` search and filtering: `search(_:caseSensitive:includingSummaries:)`,
+  `entries(withRole:)`, `entries(after:)`, `entries(matching:)`, `recentEntries(_:)`.
+- On-device tests that run against real Apple Intelligence when the hardware
+  supports it, and skip otherwise.
+
+### Changed
+- `ConversationStore.shouldCompact(maxTokens:)` now compares estimated tokens
+  rather than a character count, so the limit means what it says.
+- Comments trimmed throughout; `CLAUDE.md` renamed to `ARCHITECTURE.md`.
+
+### Fixed
+- Anthropic 408/429/5xx now map to `.unavailable` so they are retried. Only 529
+  did before, so rate limits failed outright.
+- `JSONValue` parsed integer `1` as `true`, because `NSNumber` bridges to `Bool`.
+
+
 ## [1.0.0]
 
 First public release.

@@ -1,10 +1,3 @@
-// RetryPolicy.swift
-// Exponential-backoff retry wrapper for any LanguageModelProviding backend.
-//
-// Usage:
-//   let robust = RetryingLanguageModel(wrapped: myBackend, policy: .default)
-//   let response = try await robust.sendMessage(request: request)
-
 import Foundation
 
 // MARK: - Policy

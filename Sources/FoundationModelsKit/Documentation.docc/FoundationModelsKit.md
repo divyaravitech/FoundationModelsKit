@@ -55,7 +55,23 @@ Every backend conforms to ``LanguageModelProviding``. Swapping Apple Intelligenc
 - ``OnDeviceLanguageModel``
 - ``AnthropicLanguageModel``
 - ``AnthropicConfiguration``
+- ``OpenAILanguageModel``
+- ``OpenAIConfiguration``
 - ``MockLanguageModel``
+
+### Tools
+
+- ``Tool``
+- ``ToolRegistry``
+- ``ToolCall``
+- ``ToolError``
+- ``JSONValue``
+
+### Token Budgeting
+
+- ``TokenEstimating``
+- ``HeuristicTokenEstimator``
+- ``FixedRatioTokenEstimator``
 
 ### Reliability
 

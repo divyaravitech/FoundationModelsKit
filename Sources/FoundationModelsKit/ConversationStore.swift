@@ -1,11 +1,3 @@
-// ConversationStore.swift
-// Manages the turn-by-turn transcript for a single conversation session.
-//
-// Context-window management strategy:
-//   When the transcript grows too large, the oldest entries are summarised
-//   into a single "[COMPACTED SUMMARY]" entry, keeping the most recent turns
-//   intact for immediate coherence.
-
 import Foundation
 
 // MARK: - Entry
@@ -54,13 +46,18 @@ public struct ConversationEntry: Sendable, Codable, Equatable {
 /// ```
 public actor ConversationStore: Sendable {
 
-    // Recent entries preserved verbatim during compaction so the model
-    // always sees the most immediate conversational context.
+    // Kept verbatim during compaction so recent context survives.
     private static let recentEntriesToKeep = 5
 
-    private var entries: [ConversationEntry] = []
+    /// Marks an entry produced by ``compact(using:maxTokens:)`` rather than a participant.
+    public static let summaryPrefix = "[COMPACTED SUMMARY]"
 
-    public init() {}
+    private var entries: [ConversationEntry] = []
+    private let estimator: any TokenEstimating
+
+    public init(estimator: any TokenEstimating = HeuristicTokenEstimator()) {
+        self.estimator = estimator
+    }
 
     // MARK: - Public API
 
@@ -79,6 +76,55 @@ public actor ConversationStore: Sendable {
     /// Removes all entries, resetting the conversation to empty.
     public func clear() {
         entries = []
+    }
+
+    // MARK: - Reading
+
+    /// Every stored turn, oldest first.
+    public func allEntries() -> [ConversationEntry] {
+        entries
+    }
+
+    /// Turns matching `predicate`, oldest first.
+    public func entries(matching predicate: @Sendable (ConversationEntry) -> Bool) -> [ConversationEntry] {
+        entries.filter(predicate)
+    }
+
+    /// Turns with the given role, typically `"user"` or `"assistant"`.
+    public func entries(withRole role: String) -> [ConversationEntry] {
+        entries.filter { $0.role == role }
+    }
+
+    /// Turns created after `date`.
+    public func entries(after date: Date) -> [ConversationEntry] {
+        entries.filter { $0.timestamp > date }
+    }
+
+    /// The most recent `count` turns, oldest first.
+    public func recentEntries(_ count: Int) -> [ConversationEntry] {
+        guard count > 0 else { return [] }
+        return Array(entries.suffix(count))
+    }
+
+    /// Turns whose content contains `query`.
+    ///
+    /// Compaction summaries are excluded by default — they are generated text,
+    /// so matching them returns a turn the user never wrote.
+    public func search(
+        _ query: String,
+        caseSensitive: Bool = false,
+        includingSummaries: Bool = false
+    ) -> [ConversationEntry] {
+        guard !query.isEmpty else { return [] }
+        let needle = caseSensitive ? query : query.lowercased()
+
+        return entries.filter { entry in
+            if !includingSummaries && entry.content.hasPrefix(Self.summaryPrefix) {
+                return false
+            }
+            let haystack = caseSensitive ? entry.content : entry.content.lowercased()
+            return haystack.contains(needle)
+        }
     }
 
     // MARK: - Persistence
@@ -105,14 +151,15 @@ public actor ConversationStore: Sendable {
     /// Number of entries currently in the store.
     public var entryCount: Int { entries.count }
 
+    /// Estimated token cost of the stored turns.
+    public func estimatedTokenCount() -> Int {
+        entries.reduce(0) { $0 + estimator.tokenCount(of: $1.content) }
+    }
+
     /// Returns `true` when the transcript is long enough that context-window
     /// overflow is a risk.
-    ///
-    /// Heuristic: 1 token ≈ 4 characters (conservative English estimate).
     public func shouldCompact(maxTokens: Int) -> Bool {
-        // Avoid materialising the full transcript string; sum content lengths instead.
-        let totalChars = entries.reduce(0) { $0 + $1.content.count }
-        return totalChars > maxTokens * 4
+        estimatedTokenCount() > maxTokens
     }
 
     /// Summarises the oldest entries into a single compacted entry using
@@ -151,7 +198,7 @@ public actor ConversationStore: Sendable {
 
         let summaryEntry = ConversationEntry(
             role: "assistant",
-            content: "[COMPACTED SUMMARY] \(summaryText)",
+            content: "\(Self.summaryPrefix) \(summaryText)",
             timestamp: Date()
         )
 

@@ -816,3 +816,197 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
     )
     #expect(await pcc.callCount == 1, "a prompt at the limit should escalate")
 }
+
+// MARK: - Token estimation
+
+@Test func heuristicEstimatorBeatsFixedRatioOnCJK() {
+    let estimator = HeuristicTokenEstimator()
+    let japanese = "これは日本語のテキストです"
+    // ~1 token per CJK character; a 4-chars-per-token rule reports a quarter of that.
+    #expect(estimator.tokenCount(of: japanese) >= japanese.count - 2)
+    #expect(estimator.tokenCount(of: japanese) > FixedRatioTokenEstimator().tokenCount(of: japanese))
+}
+
+@Test func heuristicEstimatorHandlesProseAndEmpty() {
+    let estimator = HeuristicTokenEstimator()
+    #expect(estimator.tokenCount(of: "") == 0)
+    let prose = String(repeating: "the quick brown fox ", count: 10)  // 200 chars
+    let count = estimator.tokenCount(of: prose)
+    #expect(count > 20 && count < 80, "English prose estimate out of range: \(count)")
+}
+
+@Test func storeUsesInjectedEstimator() async {
+    struct AlwaysTen: TokenEstimating {
+        func tokenCount(of text: String) -> Int { 10 }
+    }
+    let store = ConversationStore(estimator: AlwaysTen())
+    await store.addEntry(ConversationEntry(role: "user", content: "x"))
+    await store.addEntry(ConversationEntry(role: "user", content: "y"))
+    #expect(await store.estimatedTokenCount() == 20)
+    #expect(await store.shouldCompact(maxTokens: 19))
+    #expect(!(await store.shouldCompact(maxTokens: 20)))
+}
+
+// MARK: - ConversationStore search
+
+@Test func storeSearchFiltersAndExcludesSummaries() async {
+    let store = ConversationStore()
+    await store.addEntry(ConversationEntry(role: "user", content: "Where is the invoice?"))
+    await store.addEntry(ConversationEntry(role: "assistant", content: "In the Finance folder."))
+    await store.addEntry(ConversationEntry(
+        role: "assistant",
+        content: "\(ConversationStore.summaryPrefix) discussed the invoice"
+    ))
+
+    #expect(await store.search("invoice").count == 1)
+    #expect(await store.search("invoice", includingSummaries: true).count == 2)
+    #expect(await store.search("INVOICE").count == 1)
+    #expect(await store.search("INVOICE", caseSensitive: true).isEmpty)
+    #expect(await store.search("").isEmpty)
+}
+
+@Test func storeFiltersByRoleAndRecency() async {
+    let store = ConversationStore()
+    let cutoff = Date()
+    // Explicit timestamps: `Date()` can land on the same instant as `cutoff`.
+    await store.addEntry(ConversationEntry(role: "user", content: "a", timestamp: cutoff.addingTimeInterval(-60)))
+    await store.addEntry(ConversationEntry(role: "assistant", content: "b", timestamp: cutoff.addingTimeInterval(10)))
+    await store.addEntry(ConversationEntry(role: "user", content: "c", timestamp: cutoff.addingTimeInterval(20)))
+
+    #expect(await store.entries(withRole: "user").count == 2)
+    #expect(await store.entries(after: cutoff).count == 2)
+    #expect(await store.recentEntries(2).map(\.content) == ["b", "c"])
+    #expect(await store.recentEntries(0).isEmpty)
+    #expect(await store.entries(matching: { $0.content == "b" }).count == 1)
+}
+
+// MARK: - JSONValue
+
+@Test func jsonValueRoundTripsThroughFoundation() throws {
+    let value = JSONValue.object([
+        "city": .string("Berlin"),
+        "days": .number(3),
+        "exact": .bool(true),
+        "tags": .array([.string("a"), .null]),
+    ])
+    let data = try JSONSerialization.data(withJSONObject: value.foundationValue)
+    #expect(try JSONValue.decode(data) == value)
+}
+
+@Test func jsonValueSubscriptReadsStrings() {
+    let value = JSONValue.object(["city": .string("Oslo")])
+    #expect(value["city"]?.stringValue == "Oslo")
+    #expect(value["missing"] == nil)
+}
+
+@Test func jsonValueDistinguishesBoolFromNumber() throws {
+    let data = #"{"flag":true,"count":1}"#.data(using: .utf8)!
+    let value = try JSONValue.decode(data)
+    #expect(value["flag"] == .bool(true))
+    #expect(value["count"] == .number(1))
+}
+
+// MARK: - Tools
+
+private struct EchoTool: Tool {
+    let name = "echo"
+    let description = "Echoes the text back."
+    let parameterSchema = JSONValue.object([
+        "type": .string("object"),
+        "properties": .object(["text": .object(["type": .string("string")])]),
+        "required": .array([.string("text")]),
+    ])
+    func call(arguments: JSONValue) async throws -> String {
+        guard let text = arguments["text"]?.stringValue else {
+            throw ToolError.invalidArguments("text is required")
+        }
+        return text.uppercased()
+    }
+}
+
+@Test func toolRegistryRunsRegisteredTool() async throws {
+    let registry = ToolRegistry([EchoTool()])
+    let result = try await registry.run(
+        ToolCall(id: "1", name: "echo", arguments: .object(["text": .string("hi")]))
+    )
+    #expect(result == "HI")
+    #expect(registry.names == ["echo"])
+}
+
+@Test func toolRegistryRejectsUnknownTool() async {
+    let registry = ToolRegistry([EchoTool()])
+    await #expect(throws: LanguageModelError.toolNotSupported("nope")) {
+        try await registry.run(ToolCall(id: "1", name: "nope", arguments: .null))
+    }
+}
+
+@Test func toolSurfacesInvalidArguments() async {
+    let registry = ToolRegistry([EchoTool()])
+    await #expect(throws: ToolError.invalidArguments("text is required")) {
+        try await registry.run(ToolCall(id: "1", name: "echo", arguments: .object([:])))
+    }
+}
+
+@Test func emptyRegistryReportsEmpty() {
+    #expect(ToolRegistry([]).isEmpty)
+    #expect(!ToolRegistry([EchoTool()]).isEmpty)
+}
+
+// MARK: - OpenAI backend
+
+@Test func openAIConfigurationRedactsKeyAndDefaultsSensibly() {
+    let config = OpenAIConfiguration(apiKey: "sk-SUPERSECRET")
+    #expect(!"\(config)".contains("SUPERSECRET"))
+    #expect(config.model == OpenAIConfiguration.defaultModel)
+}
+
+@Test func openAITransientClassificationMatchesAnthropic() {
+    for code in [408, 429, 500, 503] {
+        #expect(OpenAILanguageModel.isTransient(statusCode: code))
+    }
+    for code in [400, 401, 404] {
+        #expect(!OpenAILanguageModel.isTransient(statusCode: code))
+    }
+}
+
+// MARK: - On-device, against real hardware when present
+
+@Test func onDeviceProducesRealCompletionWhenAvailable() async throws {
+    guard OnDeviceLanguageModel.isAvailable else { return }
+
+    let model = OnDeviceLanguageModel()
+    let response = try await model.sendMessage(
+        request: ModelRequest(content: "Reply with exactly: OK", privacySensitivity: .high)
+    )
+    #expect(!response.content.isEmpty)
+    #expect(response.usage.isEstimated, "on-device counts are estimates")
+    #expect(response.usage.inputTokens > 0)
+}
+
+@Test func onDeviceStreamsRealChunksWhenAvailable() async throws {
+    guard OnDeviceLanguageModel.isAvailable else { return }
+
+    let model = OnDeviceLanguageModel()
+    var text = ""
+    for try await chunk in model.streamMessage(request: ModelRequest(content: "Count to three")) {
+        text += chunk
+    }
+    #expect(!text.isEmpty, "streaming produced nothing")
+}
+
+@Test func routerKeepsHighSensitivityOnRealOnDeviceModel() async throws {
+    guard OnDeviceLanguageModel.isAvailable else { return }
+
+    let cloud = MockLanguageModel()
+    let router = ModelRouter(onDevice: OnDeviceLanguageModel(), pcc: cloud, thirdParty: cloud)
+
+    let response = try await router.routeRequest(
+        ModelRequest(
+            content: String(repeating: "sensitive record ", count: 50),
+            privacySensitivity: .high,
+            taskComplexity: .complex
+        )
+    )
+    #expect(!response.content.isEmpty)
+    #expect(await cloud.callCount == 0, "high-sensitivity request reached a cloud backend")
+}

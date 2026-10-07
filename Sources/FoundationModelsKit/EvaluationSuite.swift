@@ -1,8 +1,3 @@
-// EvaluationSuite.swift
-// Evaluates model outputs against quality, safety, and consistency criteria.
-//
-// Custom metrics conform to EvaluationMetric and are injected at init time.
-
 import Foundation
 
 // MARK: - Protocol
@@ -102,7 +97,7 @@ public actor EvaluationSuite: Sendable {
                 }
             }
 
-            // Collect and sort by original index to preserve metric order.
+            // Sort by index so results match metric order.
             var unsorted: [(index: Int, score: EvaluationScore)] = []
             for await pair in group { unsorted.append(pair) }
             return unsorted.sorted { $0.index < $1.index }.map(\.score)
