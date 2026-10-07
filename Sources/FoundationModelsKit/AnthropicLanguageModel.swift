@@ -23,7 +23,7 @@ public struct AnthropicConfiguration: Sendable {
 
     public init(
         apiKey: String,
-        model: String = "claude-opus-5-20251101",
+        model: String = "claude-opus-5-5",
         maxTokens: Int = 1024,
         baseURL: URL = URL(string: "https://api.anthropic.com")!
     ) {
@@ -32,6 +32,16 @@ public struct AnthropicConfiguration: Sendable {
         self.maxTokens = maxTokens
         self.baseURL = baseURL
     }
+}
+
+// Redact the key from `print`, string interpolation, and `po` in the debugger.
+// Without this, logging a configuration — or a crash report capturing one —
+// exposes a live credential in plain text.
+extension AnthropicConfiguration: CustomStringConvertible, CustomDebugStringConvertible {
+    public var description: String {
+        "AnthropicConfiguration(model: \(model), maxTokens: \(maxTokens), baseURL: \(baseURL), apiKey: <redacted>)"
+    }
+    public var debugDescription: String { description }
 }
 
 // MARK: - Backend
@@ -71,13 +81,16 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
 
     public func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
                     let urlRequest = try self.makeRequest(for: request, stream: true)
                     let (bytes, response) = try await self.session.bytes(for: urlRequest)
                     try self.validate(response: response, data: nil)
 
                     for try await line in bytes.lines {
+                        // Cancellation closes the underlying connection rather
+                        // than draining a response nobody is reading.
+                        try Task.checkCancellation()
                         guard line.hasPrefix("data: ") else { continue }
                         let payload = String(line.dropFirst(6))
                         if payload == "[DONE]" { break }
@@ -93,6 +106,7 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
                     continuation.finish(throwing: error)
                 }
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 

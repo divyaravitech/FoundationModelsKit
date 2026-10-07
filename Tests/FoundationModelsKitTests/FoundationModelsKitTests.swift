@@ -477,13 +477,39 @@ private func makeSDK(
     #expect(evaluation == nil)
 }
 
-@Test func sdkIgnoresUnknownMetricNames() async throws {
-    let (sdk, _) = makeSDK(metrics: ["NotARealMetric"])
+/// A metric that exists only in this test — it cannot be named in
+/// `evaluationMetrics`, so it can only reach the SDK via the injected suite.
+private struct SentinelMetric: EvaluationMetric, Sendable {
+    let name = "Sentinel"
+    func evaluate(response: ModelResponse) async -> EvaluationScore {
+        EvaluationScore(metricName: name, score: 1.0, passed: true, details: "sentinel ran")
+    }
+}
+
+@Test func sdkRunsTheInjectedSuiteNotTheConfigNames() async throws {
+    // Regression: the facade used to resolve `evaluationMetrics` against a
+    // table of built-ins and discard the injected suite, so custom metrics
+    // silently never ran.
+    let sdk = SDKIntegration(
+        config: FoundationModelsKitConfiguration(
+            profile: .balanced,
+            evaluationMetrics: ["Sentinel"],
+            regionAwareness: false,
+            loggingEnabled: true
+        ),
+        router: ModelRouter(onDevice: MockLanguageModel()),
+        store: ConversationStore(),
+        evaluation: EvaluationSuite(metrics: [SentinelMetric()]),
+        regional: RegionalAvailability()
+    )
+
     let (_, evaluation) = try await sdk.sendMessage(
         ModelRequest(content: "Hi", privacySensitivity: .high, taskComplexity: .simple)
     )
-    // Unknown names resolve to nothing, so evaluation is skipped rather than crashing.
-    #expect(evaluation == nil)
+
+    let names = try #require(evaluation?.scores.map(\.metricName))
+    #expect(names == ["Sentinel"])
+    #expect(evaluation?.scores.first?.details == "sentinel ran")
 }
 
 @Test func sdkDiagnosticsRecordOperations() async throws {
@@ -561,4 +587,203 @@ private func makeSDK(
     #expect(await onDevice.callCount == 1)
     #expect(await pcc.callCount == 0)
     #expect(await thirdParty.callCount == 0)
+}
+
+// MARK: - TokenUsage Codable resilience
+
+@Test func tokenUsageDecodesJSONMissingNewerFields() throws {
+    // Regression: synthesized Codable ignores property defaults and throws
+    // `keyNotFound`, which made every previously-saved transcript undecodable
+    // the moment a field was added.
+    let legacy = #"{"inputTokens":10,"outputTokens":5}"#.data(using: .utf8)!
+    let usage = try JSONDecoder().decode(TokenUsage.self, from: legacy)
+    #expect(usage.inputTokens == 10)
+    #expect(usage.outputTokens == 5)
+    #expect(usage.cachedInputTokens == 0)
+    #expect(usage.isEstimated == false)
+}
+
+@Test func tokenUsageRoundTripsIsEstimated() throws {
+    let usage = TokenUsage.estimated(promptChars: 400, completionChars: 80)
+    #expect(usage.isEstimated)
+    let decoded = try JSONDecoder().decode(TokenUsage.self, from: JSONEncoder().encode(usage))
+    #expect(decoded == usage)
+    #expect(decoded.isEstimated)
+}
+
+@Test func tokenUsageEstimatedIsNeverZero() {
+    // A short prompt must not report 0 tokens — downstream budget maths
+    // divides by these values.
+    let usage = TokenUsage.estimated(promptChars: 1, completionChars: 1)
+    #expect(usage.inputTokens >= 1)
+    #expect(usage.outputTokens >= 1)
+}
+
+// MARK: - Stream cancellation
+
+@Test func streamCancellationStopsUpstreamWork() async throws {
+    // A consumer that breaks early must not leave the backend running.
+    actor Counter {
+        private(set) var chunks = 0
+        func bump() { chunks += 1 }
+    }
+    let counter = Counter()
+
+    struct EndlessModel: LanguageModelProviding, Sendable {
+        let counter: Counter
+        func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+            ModelResponse(content: "", stopReason: "end_turn",
+                          usage: TokenUsage(inputTokens: 1, outputTokens: 1))
+        }
+        func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+            AsyncThrowingStream { continuation in
+                let task = Task {
+                    while !Task.isCancelled {
+                        await counter.bump()
+                        continuation.yield("chunk")
+                        try? await Task.sleep(for: .milliseconds(5))
+                    }
+                    continuation.finish()
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
+    }
+
+    let model = EndlessModel(counter: counter)
+    var received = 0
+    for try await _ in model.streamMessage(request: ModelRequest(content: "go")) {
+        received += 1
+        if received == 3 { break }
+    }
+
+    let atBreak = await counter.chunks
+    try await Task.sleep(for: .milliseconds(100))
+    let afterWait = await counter.chunks
+
+    // Production must have stopped; allow one in-flight iteration to land.
+    #expect(afterWait - atBreak <= 1, "stream kept producing after the consumer stopped")
+}
+
+@Test func retryingModelDoesNotReplayAlreadyYieldedChunks() async throws {
+    // Retrying a stream that already emitted would duplicate partial output.
+    actor Attempts {
+        private(set) var count = 0
+        func next() -> Int { count += 1; return count }
+    }
+    let attempts = Attempts()
+
+    struct FailsMidStream: LanguageModelProviding, Sendable {
+        let attempts: Attempts
+        func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+            throw LanguageModelError.unavailable
+        }
+        func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+            AsyncThrowingStream { continuation in
+                Task {
+                    _ = await attempts.next()
+                    continuation.yield("Hello wor")
+                    continuation.finish(throwing: LanguageModelError.unavailable)
+                }
+            }
+        }
+    }
+
+    let retrying = RetryingLanguageModel(
+        wrapped: FailsMidStream(attempts: attempts),
+        policy: RetryPolicy(maxAttempts: 3, initialDelay: 0, backoffMultiplier: 1, maxDelay: 0)
+    )
+
+    var chunks: [String] = []
+    await #expect(throws: LanguageModelError.unavailable) {
+        for try await chunk in retrying.streamMessage(request: ModelRequest(content: "hi")) {
+            chunks.append(chunk)
+        }
+    }
+
+    #expect(chunks == ["Hello wor"], "partial output was replayed")
+    #expect(await attempts.count == 1, "a stream that already emitted must not be retried")
+}
+
+// MARK: - DynamicProfileBuilder
+
+@Test func profileBuilderDefaults() {
+    let profile = DynamicProfileBuilder().build()
+    #expect(profile.name == "default")
+    #expect(profile.routingStrategy == .adaptive)
+    #expect(profile.maxContextTokens == 4096)
+    #expect(profile.autoCompact)
+    #expect(profile.privacySensitivity == .medium)
+}
+
+@Test func profileBuilderChainsAndIsValueSemantic() {
+    let base = DynamicProfileBuilder().withName("base")
+    let a = base.withMaxContextTokens(1024).build()
+    let b = base.withMaxContextTokens(8192).build()
+
+    // Each `with` returns a copy — branching off `base` must not alias.
+    #expect(a.maxContextTokens == 1024)
+    #expect(b.maxContextTokens == 8192)
+    #expect(a.name == "base" && b.name == "base")
+}
+
+@Test func prebuiltProfilesHonourTheirPrivacyIntent() {
+    #expect(DynamicProfile.onDeviceOnly.routingStrategy == .preferOnDevice)
+    #expect(DynamicProfile.onDeviceOnly.privacySensitivity == .high)
+    #expect(DynamicProfile.cloudFirst.privacySensitivity == .low)
+    #expect(DynamicProfile.balanced.autoCompact)
+}
+
+@Test func profileCodableRoundtrip() throws {
+    let profile = DynamicProfileBuilder().withName("x").withRoutingStrategy(.preferPCC).build()
+    let decoded = try JSONDecoder().decode(
+        DynamicProfile.self, from: JSONEncoder().encode(profile)
+    )
+    #expect(decoded.name == "x")
+    #expect(decoded.routingStrategy == .preferPCC)
+}
+
+// MARK: - AnthropicLanguageModel
+
+@Test func anthropicConfigurationRedactsAPIKeyFromDescription() {
+    let config = AnthropicConfiguration(apiKey: "sk-ant-SUPERSECRET-value")
+    let rendered = "\(config)" + String(reflecting: config)
+    #expect(!rendered.contains("SUPERSECRET"), "API key leaked via string conversion")
+    #expect(rendered.contains("redacted"))
+}
+
+@Test func anthropicConfigurationDefaultModelIsNotDateSuffixed() {
+    // Anthropic model IDs are complete as-is; a date suffix is a fabricated ID
+    // that fails at request time.
+    let model = AnthropicConfiguration(apiKey: "k").model
+    #expect(!model.contains("-2025"))
+    #expect(!model.contains("-2026"))
+    #expect(model == "claude-opus-5-5")
+}
+
+@Test func anthropicSurfacesHTTPErrorsAsTypedErrors() async throws {
+    // 529 (overloaded) must map to `.unavailable` so RetryingLanguageModel
+    // retries it; other 4xx must not be silently retried.
+    #expect(LanguageModelError.unavailable == LanguageModelError.unavailable)
+    let policy = RetryPolicy.default
+    #expect(policy.shouldRetry(LanguageModelError.unavailable))
+    #expect(!policy.shouldRetry(LanguageModelError.contextWindowExceeded))
+    #expect(!policy.shouldRetry(AnthropicError.apiError(statusCode: 400, body: "bad")))
+}
+
+// MARK: - OnDeviceLanguageModel
+
+@Test func onDeviceReportsAvailabilityWithoutCrashing() {
+    // Must answer on every platform, including those without FoundationModels.
+    _ = OnDeviceLanguageModel.isAvailable
+}
+
+@Test func onDeviceThrowsUnavailableWhenFrameworkAbsent() async throws {
+    // On a machine without Apple Intelligence this is the contract callers
+    // rely on to fall back; it must be a typed error, not a crash.
+    let model = OnDeviceLanguageModel()
+    guard !OnDeviceLanguageModel.isAvailable else { return }  // real hardware: skip
+    await #expect(throws: LanguageModelError.unavailable) {
+        try await model.sendMessage(request: ModelRequest(content: "hi"))
+    }
 }

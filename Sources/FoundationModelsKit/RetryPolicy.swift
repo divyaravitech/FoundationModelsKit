@@ -87,22 +87,34 @@ public struct RetryingLanguageModel: LanguageModelProviding, Sendable {
         throw lastError
     }
 
-    /// Streaming retries the initial connection; individual chunks are not retried.
+    /// Retries only the *connection*, never a stream that has already emitted.
+    ///
+    /// Once a chunk has been yielded the consumer has seen partial output, so
+    /// restarting would replay it — `"Hello wor"` followed by `"Hello world"`.
+    /// A failure after the first chunk is therefore surfaced, not retried.
     public func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 var lastError: Error = LanguageModelError.unavailable
                 var delay = policy.initialDelay
 
                 for attempt in 1...policy.maxAttempts {
+                    var yieldedAnything = false
                     do {
                         for try await chunk in wrapped.streamMessage(request: request) {
+                            try Task.checkCancellation()
+                            yieldedAnything = true
                             continuation.yield(chunk)
                         }
                         continuation.finish()
                         return
+                    } catch is CancellationError {
+                        continuation.finish()
+                        return
                     } catch {
                         lastError = error
+                        // Partial output already delivered — retrying would duplicate it.
+                        if yieldedAnything { break }
                         guard attempt < policy.maxAttempts, policy.shouldRetry(error) else { break }
                         try? await Task.sleep(for: .seconds(delay))
                         delay = min(delay * policy.backoffMultiplier, policy.maxDelay)
@@ -110,6 +122,7 @@ public struct RetryingLanguageModel: LanguageModelProviding, Sendable {
                 }
                 continuation.finish(throwing: lastError)
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 }

@@ -59,7 +59,7 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
 
     public func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
 #if canImport(FoundationModels)
                 guard #available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) else {
                     continuation.finish(throwing: LanguageModelError.unavailable)
@@ -69,12 +69,16 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
                     let session = LanguageModelSession()
                     var previous = ""
                     for try await snapshot in session.streamResponse(to: request.content) {
+                        // Stop generating as soon as the consumer stops reading.
+                        try Task.checkCancellation()
                         // Yield only the delta since the last snapshot.
                         let full = snapshot.content
                         let delta = String(full.dropFirst(previous.count))
                         if !delta.isEmpty { continuation.yield(delta) }
                         previous = full
                     }
+                    continuation.finish()
+                } catch is CancellationError {
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: LanguageModelError.unavailable)
@@ -83,6 +87,7 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
                 continuation.finish(throwing: LanguageModelError.unavailable)
 #endif
             }
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 

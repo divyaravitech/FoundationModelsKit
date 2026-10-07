@@ -123,7 +123,9 @@ public actor RegionalAvailability: Sendable {
     ///
     /// Mapping is coarse (timezone → region) and is a best-effort guess.
     /// Override by calling `updateAvailability(_:)` with a server-resolved record.
-    public func currentRegion() -> Region {
+    /// `nonisolated` because it reads only `TimeZone.current` — no actor state.
+    /// Isolating it would force every caller through a needless actor hop.
+    public nonisolated func currentRegion() -> Region {
         let tz = TimeZone.current.identifier
         switch true {
         case tz.hasPrefix("America/New_York"), tz.hasPrefix("America/Toronto"),

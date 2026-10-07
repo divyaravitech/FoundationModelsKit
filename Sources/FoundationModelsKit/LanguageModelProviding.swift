@@ -26,15 +26,20 @@ public protocol LanguageModelProviding: Sendable {
 public extension LanguageModelProviding {
     func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
                     let response = try await sendMessage(request: request)
+                    try Task.checkCancellation()
                     continuation.yield(response.content)
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
                 }
             }
+            // Without this, a consumer that breaks out of the `for try await`
+            // loop early leaves the request running — and billing — in the
+            // background. Terminating the stream must cancel the work.
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 }
@@ -46,7 +51,14 @@ public struct ModelRequest: Sendable, Codable, Equatable, Hashable {
     /// The user-facing text prompt or continuation.
     public var content: String
 
-    /// Names of tools the model may invoke. `nil` means no tools available.
+    /// Names of tools this request would need.
+    ///
+    /// - Warning: This is currently a **routing hint only** — no tool is
+    ///   executed, and no backend sends tool definitions to its provider.
+    ///   A non-empty value disqualifies the request from the on-device path,
+    ///   because on-device tool calling is not wired up yet.
+    ///   Real tool calling is tracked in issue #7; until it lands, do not
+    ///   expect a model to call anything named here.
     public var tools: [String]?
 
     /// How sensitive the payload is — used by the router to avoid sending
@@ -96,37 +108,60 @@ public struct ModelResponse: Sendable, Codable, Equatable {
 public struct TokenUsage: Sendable, Codable, Equatable {
     public var inputTokens: Int
     public var outputTokens: Int
-    /// Tokens served from the prompt cache (subset of inputTokens).
+
+    /// Tokens served from the prompt cache (subset of `inputTokens`).
     public var cachedInputTokens: Int
 
-    public init(inputTokens: Int, outputTokens: Int, cachedInputTokens: Int = 0) {
+    /// `true` when these counts were estimated rather than reported by the
+    /// backend. On-device models do not expose exact token counts, so
+    /// `OnDeviceLanguageModel` returns estimates flagged with this property.
+    ///
+    /// Do not use estimated counts for billing or quota enforcement.
+    public var isEstimated: Bool
+
+    public init(
+        inputTokens: Int,
+        outputTokens: Int,
+        cachedInputTokens: Int = 0,
+        isEstimated: Bool = false
+    ) {
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
         self.cachedInputTokens = cachedInputTokens
+        self.isEstimated = isEstimated
     }
 
     /// Net new tokens billed (excludes cache hits).
     public var billableInputTokens: Int { inputTokens - cachedInputTokens }
 
-    /// `true` when these counts were estimated rather than reported by the
-    /// backend. On-device models do not currently expose exact token counts,
-    /// so `OnDeviceLanguageModel` returns estimates flagged with this property.
+    /// Builds a `TokenUsage` from character counts using the ~4-characters-per-token
+    /// heuristic for English text, flagged `isEstimated == true`.
     ///
-    /// Do not use estimated counts for billing or quota enforcement.
-    public var isEstimated: Bool = false
-
-    /// Builds a `TokenUsage` from character counts using the standard
-    /// ~4-characters-per-token heuristic for English text.
-    ///
-    /// Used by backends that do not report exact counts. The result is always
-    /// marked `isEstimated == true`.
+    /// Used by backends that do not report exact counts.
     public static func estimated(promptChars: Int, completionChars: Int) -> TokenUsage {
-        var usage = TokenUsage(
+        TokenUsage(
             inputTokens: Swift.max(1, promptChars / 4),
-            outputTokens: Swift.max(1, completionChars / 4)
+            outputTokens: Swift.max(1, completionChars / 4),
+            isEstimated: true
         )
-        usage.isEstimated = true
-        return usage
+    }
+
+    // MARK: Codable
+
+    // Hand-written so that persisted data stays readable as fields are added.
+    // Swift's synthesized `init(from:)` ignores property defaults and throws
+    // `keyNotFound`, which would make every previously saved transcript
+    // undecodable the moment a new field lands.
+    private enum CodingKeys: String, CodingKey {
+        case inputTokens, outputTokens, cachedInputTokens, isEstimated
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.inputTokens = try container.decode(Int.self, forKey: .inputTokens)
+        self.outputTokens = try container.decode(Int.self, forKey: .outputTokens)
+        self.cachedInputTokens = try container.decodeIfPresent(Int.self, forKey: .cachedInputTokens) ?? 0
+        self.isEstimated = try container.decodeIfPresent(Bool.self, forKey: .isEstimated) ?? false
     }
 }
 

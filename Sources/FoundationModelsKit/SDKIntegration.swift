@@ -11,9 +11,13 @@ public struct FoundationModelsKitConfiguration: Sendable, Codable {
     /// Routing and context-management preferences.
     public var profile: DynamicProfile
 
-    /// Names of built-in metrics to apply to every response.
-    /// Valid values: `"NonEmpty"`, `"Length"`, `"ContainsKeywords"`.
-    /// Unknown names are silently ignored.
+    /// Whether responses are evaluated, and a label for *what* is being run.
+    ///
+    /// - Important: This field does **not** select metrics. The
+    ///   `EvaluationSuite` passed to `SDKIntegration.init` decides which
+    ///   metrics run — that is the only way to use a custom metric. An empty
+    ///   array here disables evaluation entirely; any non-empty array enables
+    ///   it. The contents serve as documentation and appear in diagnostics.
     public var evaluationMetrics: [String]
 
     /// When `true`, consults `RegionalAvailability` before routing.
@@ -93,8 +97,8 @@ public actor SDKIntegration: Sendable {
     private let evaluation: EvaluationSuite
     private let regional: RegionalAvailability
 
-    /// Metrics active for this integration, filtered from `config.evaluationMetrics`.
-    private let activeMetrics: [any EvaluationMetric]
+    /// Whether responses are evaluated. Derived once at init.
+    private let isEvaluationEnabled: Bool
 
     // Capped ring-buffer of the last 20 operations.
     private var diagnosticLog: [DiagnosticEntry] = []
@@ -113,14 +117,11 @@ public actor SDKIntegration: Sendable {
         self.evaluation = evaluation
         self.regional = regional
 
-        // Resolve the named metric strings to concrete metric instances once at
-        // init time so sendMessage() never does string comparison on the hot path.
-        let builtIn: [String: any EvaluationMetric] = [
-            "NonEmpty":         NonEmptyMetric(),
-            "Length":           LengthMetric(),
-            "ContainsKeywords": ContainsKeywordsMetric(keywords: []),
-        ]
-        self.activeMetrics = config.evaluationMetrics.compactMap { builtIn[$0] }
+        // The injected suite decides *which* metrics run; the config field only
+        // decides *whether* they run. An earlier version resolved metric names
+        // against a built-in table and ignored the injected suite entirely,
+        // which silently discarded any custom metric a caller passed in.
+        self.isEvaluationEnabled = !config.evaluationMetrics.isEmpty
     }
 
     // MARK: - Primary API
@@ -159,17 +160,11 @@ public actor SDKIntegration: Sendable {
             throw error
         }
 
-        // 4. Evaluate using only the metrics named in config.
-        let evalResult: EvaluationResult?
-        if !activeMetrics.isEmpty {
-            let filteredSuite = EvaluationSuite(metrics: activeMetrics)
-            evalResult = await filteredSuite.evaluate(
-                response: response,
-                responseID: UUID().uuidString
-            )
-        } else {
-            evalResult = nil
-        }
+        // 4. Evaluate with the injected suite — the caller's metrics, including
+        //    any custom ones, which a names-based filter could never express.
+        let evalResult: EvaluationResult? = isEvaluationEnabled
+            ? await evaluation.evaluate(response: response, responseID: UUID().uuidString)
+            : nil
 
         // 5. Commit both turns to the store now that we have a successful response.
         await store.addEntry(ConversationEntry(role: "user", content: request.content, toolsUsed: request.tools))
