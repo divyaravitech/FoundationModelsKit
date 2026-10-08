@@ -57,11 +57,13 @@ Every backend conforms to ``LanguageModelProviding``. Swapping Apple Intelligenc
 - ``AnthropicConfiguration``
 - ``OpenAILanguageModel``
 - ``OpenAIConfiguration``
+- ``GeminiLanguageModel``
+- ``GeminiConfiguration``
 - ``MockLanguageModel``
 
 ### Tools
 
-- ``Tool``
+- ``ModelTool``
 - ``ToolRegistry``
 - ``ToolCall``
 - ``ToolError``
@@ -72,6 +74,7 @@ Every backend conforms to ``LanguageModelProviding``. Swapping Apple Intelligenc
 - ``TokenEstimating``
 - ``HeuristicTokenEstimator``
 - ``FixedRatioTokenEstimator``
+- ``AnthropicTokenCounter``
 
 ### Reliability
 

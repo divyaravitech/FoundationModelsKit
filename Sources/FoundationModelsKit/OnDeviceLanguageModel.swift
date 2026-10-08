@@ -21,9 +21,19 @@ import FoundationModels
 /// ```
 public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
 
-    public init() {}
+    private let tools: [any ModelTool]
+
+    /// - Parameter tools: Tools the model may call. Their JSON Schemas are
+    ///   converted to Apple's runtime schema type, so no `@Generable` type is
+    ///   needed. A tool whose schema cannot be converted throws at call time.
+    public init(tools: [any ModelTool] = []) {
+        self.tools = tools
+    }
 
     // MARK: - LanguageModelProviding
+
+    /// Only when tools were registered — the framework has no ad-hoc tool path.
+    public var supportsTools: Bool { !tools.isEmpty }
 
     public func sendMessage(request: ModelRequest) async throws -> ModelResponse {
 #if canImport(FoundationModels)
@@ -31,7 +41,7 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
             throw LanguageModelError.unavailable
         }
         do {
-            let session = LanguageModelSession()
+            let session = try makeSession()
             let result = try await session.respond(to: request.content)
             // The framework exposes no token counts, so these are estimates.
             return ModelResponse(
@@ -59,7 +69,7 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
                     return
                 }
                 do {
-                    let session = LanguageModelSession()
+                    let session = try makeSession()
                     var previous = ""
                     for try await snapshot in session.streamResponse(to: request.content) {
                         try Task.checkCancellation()
@@ -82,6 +92,16 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    // MARK: - Session
+
+#if canImport(FoundationModels)
+    @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
+    private func makeSession() throws -> LanguageModelSession {
+        guard !tools.isEmpty else { return LanguageModelSession() }
+        return LanguageModelSession(tools: try tools.map(OnDeviceToolAdapter.init))
+    }
+#endif
 
     // MARK: - Availability
 

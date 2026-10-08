@@ -76,7 +76,7 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
 
     public init(
         config: AnthropicConfiguration,
-        tools: [any Tool] = [],
+        tools: [any ModelTool] = [],
         session: URLSession = .shared
     ) {
         self.config = config

@@ -92,7 +92,7 @@ let invoiceTurns = await store.search("invoice")
 Tools:
 
 ```swift
-struct Weather: Tool {
+struct Weather: ModelTool {
     let name = "get_weather"
     let description = "Current weather for a city."
     let parameterSchema = JSONValue.object([
@@ -113,6 +113,13 @@ let model = AnthropicLanguageModel(config: config, tools: [Weather()])
 ```
 
 The kit runs the tool loop and feeds results back until the model stops asking.
+
+The same tool works on-device — its JSON Schema is converted to Apple's runtime
+schema type, so you don't need a `@Generable` Swift type:
+
+```swift
+let onDevice = OnDeviceLanguageModel(tools: [Weather()])
+```
 
 Quality checks on responses:
 
@@ -163,9 +170,11 @@ Token counts from this backend are estimated from character length — the frame
 
 **`OpenAILanguageModel`** — Chat Completions API, SSE streaming.
 
+**`GeminiLanguageModel`** — `generateContent`, SSE streaming.
+
 **`MockLanguageModel`** — records calls, returns what you tell it to. For tests and previews.
 
-Both cloud backends are plain `URLSession`. No dependencies.
+All three cloud backends are plain `URLSession`. No dependencies.
 
 Writing your own backend is one method — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -216,9 +225,8 @@ Zero dependencies is a policy, not an accident — PRs adding one to the core ta
 
 | | |
 |---|---|
-| Tool calling on-device | Apple's `Tool` protocol, once the routing allows it |
-| Real tokenizer | current estimator is character-class heuristics ([#5](https://github.com/divyaravitech/FoundationModelsKit/issues/5)) |
-| Gemini backend | mirrors the existing two |
+| Exact token counts beyond Anthropic | OpenAI and Gemini expose counting endpoints too |
+| Tool calling in the streaming path | works for complete responses today |
 | PCC | [blocked on Apple](https://github.com/divyaravitech/FoundationModelsKit/issues/2) |
 
 [Contributions welcome](CONTRIBUTING.md) — several issues are scoped as good first ones.

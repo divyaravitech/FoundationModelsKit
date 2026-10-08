@@ -95,7 +95,7 @@ public extension JSONValue {
 /// Something the model can call.
 ///
 /// ```swift
-/// struct Weather: Tool {
+/// struct Weather: ModelTool {
 ///     let name = "get_weather"
 ///     let description = "Current weather for a city."
 ///     let parameterSchema: JSONValue = .object([
@@ -114,7 +114,7 @@ public extension JSONValue {
 ///     }
 /// }
 /// ```
-public protocol Tool: Sendable {
+public protocol ModelTool: Sendable {
     var name: String { get }
     var description: String { get }
 
@@ -152,17 +152,17 @@ public struct ToolCall: Sendable, Equatable {
 
 /// Looks up tools by name and runs them.
 public struct ToolRegistry: Sendable {
-    private let tools: [String: any Tool]
+    private let tools: [String: any ModelTool]
 
-    public init(_ tools: [any Tool]) {
+    public init(_ tools: [any ModelTool]) {
         self.tools = Dictionary(tools.map { ($0.name, $0) }, uniquingKeysWith: { _, last in last })
     }
 
     public var isEmpty: Bool { tools.isEmpty }
-    public var all: [any Tool] { Array(tools.values) }
+    public var all: [any ModelTool] { Array(tools.values) }
     public var names: [String] { Array(tools.keys).sorted() }
 
-    public func tool(named name: String) -> (any Tool)? { tools[name] }
+    public func tool(named name: String) -> (any ModelTool)? { tools[name] }
 
     /// Runs a call, or throws ``LanguageModelError/toolNotSupported(_:)`` if
     /// the model asked for something that is not registered.

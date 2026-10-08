@@ -94,13 +94,13 @@ public actor ModelRouter: LanguageModelProviding {
     /// privacy — `routeRequest(_:)` applies the privacy rules first.
     ///
     /// A request qualifies when all three hold: it is under
-    /// ``onDeviceCharacterLimit`` characters, it needs no tools (on-device
-    /// tool calling is not wired up — see issue #7), and it is declared
-    /// ``TaskComplexity/simple``.
+    /// ``onDeviceCharacterLimit`` characters, it is declared
+    /// ``TaskComplexity/simple``, and either it needs no tools or the
+    /// on-device backend was given the tools it asks for.
     private func isOnDeviceEligible(_ request: ModelRequest) -> Bool {
         let isSmall = request.content.count < Self.onDeviceCharacterLimit
-        let needsNoTools = request.tools?.isEmpty != false
+        let toolsSatisfied = request.tools?.isEmpty != false || onDeviceModel.supportsTools
         let isSimple = request.taskComplexity == .simple
-        return isSmall && needsNoTools && isSimple
+        return isSmall && toolsSatisfied && isSimple
     }
 }

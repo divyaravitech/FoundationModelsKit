@@ -9,6 +9,12 @@ public protocol LanguageModelProviding: Sendable {
     /// Sends a request and returns the complete response.
     func sendMessage(request: ModelRequest) async throws -> ModelResponse
 
+    /// Whether this backend can run the tools a request asks for.
+    ///
+    /// ``ModelRouter`` uses it to decide whether a tool-using request may stay
+    /// on-device. Defaults to `true`, which is right for cloud backends.
+    var supportsTools: Bool { get }
+
     /// Streams the response token-by-token as an `AsyncThrowingStream<String, Error>`.
     ///
     /// A default implementation is provided that calls `sendMessage` and yields
@@ -18,6 +24,8 @@ public protocol LanguageModelProviding: Sendable {
 }
 
 public extension LanguageModelProviding {
+    var supportsTools: Bool { true }
+
     func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {

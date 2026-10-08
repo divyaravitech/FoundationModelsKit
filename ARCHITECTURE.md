@@ -34,7 +34,8 @@ Within `.medium`/`.low`, a request stays on-device when it is under 500 characte
 
 ### Backends
 - `OnDeviceLanguageModel` — Apple `FoundationModels`; requires macOS 26 / iOS 26. Compiles everywhere, throws `.unavailable` where unsupported. Token counts are **estimated** (`TokenUsage.isEstimated == true`).
-- `AnthropicLanguageModel` — Messages API over `URLSession`, SSE streaming, no dependencies.
+- `AnthropicLanguageModel` — Messages API over `URLSession`, SSE streaming, tool calling.
+- `OpenAILanguageModel` / `GeminiLanguageModel` — same shape, no dependencies.
 - `MockLanguageModel` — actor test double; records `callCount` and `lastRequest`.
 - `RetryingLanguageModel` — wraps any backend with exponential backoff.
 
@@ -60,7 +61,8 @@ Wires routing, compaction, evaluation, transcript, and diagnostics behind one `s
 4. **`Codable` types decode data missing newer fields.** Synthesized `init(from:)` ignores property defaults and throws `keyNotFound`; hand-write `init(from:)` with `decodeIfPresent` when adding a field.
 5. **No `@unchecked Sendable`.** Swift 6 strict concurrency, enforced via `swiftLanguageModes: [.v6]`.
 6. **Zero runtime dependencies** in the core target.
-7. **Anthropic model IDs are never date-suffixed** — `claude-opus-5-5`, not `claude-opus-5-5-20260401`.
+7. **A tool's JSON Schema must survive conversion to `DynamicGenerationSchema`** — that bridge is what lets one `ModelTool` run on-device and in the cloud.
+8. **Anthropic model IDs are never date-suffixed** — `claude-opus-5-5`, not `claude-opus-5-5-20260401`.
 
 ## Testing
 
@@ -73,5 +75,5 @@ Wires routing, compaction, evaluation, transcript, and diagnostics behind one `s
 | ✅ | Protocol layer, routing, conversation, evaluation, profiles, region, facade |
 | ✅ | Streaming, retries, persistence, on-device + Anthropic backends |
 | ⛔️ | PCC backend — blocked; `PrivateCloudComputeLanguageModel` is in Apple's binary but absent from the public interface (issue #2) |
-| 📋 | Tool calling — `ModelRequest.tools` is a name hint only (issue #7) |
-| 📋 | OpenAI/Gemini backends (#1), real tokenizer (#5), `ConversationStore` search (#6) |
+| ✅ | Tool calling, including on-device via `DynamicGenerationSchema` |
+| ✅ | OpenAI and Gemini backends, token estimation, transcript search |

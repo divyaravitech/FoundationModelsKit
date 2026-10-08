@@ -78,3 +78,41 @@ public struct FixedRatioTokenEstimator: TokenEstimating {
         max(1, text.count / charactersPerToken)
     }
 }
+
+/// Exact counts from Anthropic's `/v1/messages/count_tokens` endpoint.
+///
+/// Costs a network round trip, so it suits deliberate budgeting rather than
+/// per-keystroke checks. `tokenCount(of:)` cannot be async, so it falls back to
+/// the heuristic; call ``exactTokenCount(of:)`` when you can await.
+public struct AnthropicTokenCounter: Sendable {
+    private let config: AnthropicConfiguration
+    private let session: URLSession
+
+    public init(config: AnthropicConfiguration, session: URLSession = .shared) {
+        self.config = config
+        self.session = session
+    }
+
+    public func exactTokenCount(of text: String) async throws -> Int {
+        var request = URLRequest(url: config.baseURL.appendingPathComponent("v1/messages/count_tokens"))
+        request.httpMethod = "POST"
+        request.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": config.model,
+            "messages": [["role": "user", "content": text]],
+        ])
+
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw LanguageModelError.unavailable
+        }
+        return try JSONDecoder().decode(CountTokensResponse.self, from: data).inputTokens
+    }
+}
+
+private struct CountTokensResponse: Decodable {
+    let inputTokens: Int
+    enum CodingKeys: String, CodingKey { case inputTokens = "input_tokens" }
+}

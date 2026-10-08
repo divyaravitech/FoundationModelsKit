@@ -908,7 +908,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
 
 // MARK: - Tools
 
-private struct EchoTool: Tool {
+private struct EchoTool: ModelTool {
     let name = "echo"
     let description = "Echoes the text back."
     let parameterSchema = JSONValue.object([
@@ -1009,4 +1009,132 @@ private struct EchoTool: Tool {
     )
     #expect(!response.content.isEmpty)
     #expect(await cloud.callCount == 0, "high-sensitivity request reached a cloud backend")
+}
+
+// MARK: - On-device tool calling
+
+private struct CityLookupTool: ModelTool {
+    let name = "get_population"
+    let description = "Returns the population of a city."
+    let parameterSchema = JSONValue.object([
+        "type": .string("object"),
+        "properties": .object([
+            "city": .object([
+                "type": .string("string"),
+                "description": .string("City name"),
+            ])
+        ]),
+        "required": .array([.string("city")]),
+    ])
+
+    func call(arguments: JSONValue) async throws -> String {
+        guard let city = arguments["city"]?.stringValue else {
+            throw ToolError.invalidArguments("city is required")
+        }
+        return "\(city) has 3,850,000 residents."
+    }
+}
+
+@Test func onDeviceAcceptsToolsWhenAvailable() async throws {
+    guard OnDeviceLanguageModel.isAvailable else { return }
+
+    let model = OnDeviceLanguageModel(tools: [CityLookupTool()])
+    let response = try await model.sendMessage(
+        request: ModelRequest(
+            content: "What is the population of Berlin? Use the tool.",
+            privacySensitivity: .high
+        )
+    )
+    #expect(!response.content.isEmpty)
+}
+
+@Test func onDeviceWithoutToolsStillWorks() async throws {
+    guard OnDeviceLanguageModel.isAvailable else { return }
+    let model = OnDeviceLanguageModel()
+    let response = try await model.sendMessage(request: ModelRequest(content: "Say OK"))
+    #expect(!response.content.isEmpty)
+}
+
+// MARK: - Gemini
+
+@Test func geminiConfigurationRedactsKey() {
+    let config = GeminiConfiguration(apiKey: "AIza-SUPERSECRET")
+    #expect(!"\(config)".contains("SUPERSECRET"))
+    #expect(config.model == GeminiConfiguration.defaultModel)
+}
+
+@Test func geminiTransientClassificationMatchesOthers() {
+    for code in [408, 429, 500, 503] { #expect(GeminiLanguageModel.isTransient(statusCode: code)) }
+    for code in [400, 401, 404] { #expect(!GeminiLanguageModel.isTransient(statusCode: code)) }
+}
+
+// MARK: - supportsTools routing
+
+@Test func onDeviceAdvertisesToolSupportOnlyWhenGivenTools() {
+    #expect(!OnDeviceLanguageModel().supportsTools)
+    #expect(OnDeviceLanguageModel(tools: [EchoTool()]).supportsTools)
+}
+
+@Test func routerKeepsToolRequestOnDeviceWhenBackendHasTools() async throws {
+    let onDevice = MockLanguageModel()
+    let cloud = MockLanguageModel()
+    let router = ModelRouter(onDevice: onDevice, pcc: cloud)
+
+    // MockLanguageModel reports supportsTools == true via the protocol default.
+    let request = ModelRequest(
+        content: "short", tools: ["echo"],
+        privacySensitivity: .low, taskComplexity: .simple
+    )
+    _ = try await router.routeRequest(request)
+    #expect(await onDevice.callCount == 1)
+    #expect(await cloud.callCount == 0)
+}
+
+@Test func routerEscalatesToolRequestWhenOnDeviceLacksTools() async throws {
+    struct NoTools: LanguageModelProviding {
+        var supportsTools: Bool { false }
+        func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+            ModelResponse(content: "local", stopReason: "end_turn",
+                          usage: TokenUsage(inputTokens: 1, outputTokens: 1))
+        }
+    }
+    let cloud = MockLanguageModel()
+    let router = ModelRouter(onDevice: NoTools(), pcc: cloud)
+
+    _ = try await router.routeRequest(
+        ModelRequest(content: "short", tools: ["echo"],
+                     privacySensitivity: .low, taskComplexity: .simple)
+    )
+    #expect(await cloud.callCount == 1)
+}
+
+// MARK: - Dynamic tool schema
+
+@Test func dynamicSchemaAcceptsNestedJSONSchema() async throws {
+    guard OnDeviceLanguageModel.isAvailable else { return }
+
+    struct Nested: ModelTool {
+        let name = "book"
+        let description = "Books a trip."
+        let parameterSchema = JSONValue.object([
+            "type": .string("object"),
+            "properties": .object([
+                "city": .object(["type": .string("string")]),
+                "nights": .object(["type": .string("integer")]),
+                "flexible": .object(["type": .string("boolean")]),
+                "tags": .object(["type": .string("array"),
+                                 "items": .object(["type": .string("string")])]),
+            ]),
+            "required": .array([.string("city")]),
+        ])
+        func call(arguments: JSONValue) async throws -> String { "booked" }
+    }
+
+    // Construction converts the schema; a bad conversion throws here.
+    let model = OnDeviceLanguageModel(tools: [Nested()])
+    #expect(model.supportsTools)
+    let response = try await model.sendMessage(
+        request: ModelRequest(content: "Book me 2 nights in Oslo.", privacySensitivity: .high)
+    )
+    #expect(!response.content.isEmpty)
 }

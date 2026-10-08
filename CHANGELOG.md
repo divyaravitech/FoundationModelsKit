@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- On-device tool calling. A `ModelTool`'s JSON Schema is converted to Apple's
+  `DynamicGenerationSchema` at runtime, so the same tool runs on-device and in
+  the cloud without a `@Generable` type. `OnDeviceLanguageModel(tools:)`.
+- `LanguageModelProviding.supportsTools`, so `ModelRouter` can keep a tool-using
+  request on-device when the backend can actually run it.
+- `GeminiLanguageModel` for `generateContent`, with SSE streaming.
+- `AnthropicTokenCounter` for exact counts from `/v1/messages/count_tokens`.
 - Tool calling: `Tool`, `ToolRegistry`, `ToolCall`, and a `JSONValue` type for
   schemas and arguments. `AnthropicLanguageModel(config:tools:)` sends tool
   definitions and runs the multi-turn loop, capped at 8 turns.
@@ -20,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   supports it, and skip otherwise.
 
 ### Changed
+- `Tool` renamed to `ModelTool`; it collided with `FoundationModels.Tool` for
+  anyone importing both. Unreleased, so no migration needed.
 - `ConversationStore.shouldCompact(maxTokens:)` now compares estimated tokens
   rather than a character count, so the limit means what it says.
 - Comments trimmed throughout; `CLAUDE.md` renamed to `ARCHITECTURE.md`.
