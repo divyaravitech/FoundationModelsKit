@@ -23,8 +23,8 @@ import FoundationModelsKit
 
 let router = ModelRouter(onDevice: OnDeviceLanguageModel())
 
-let response = try await router.sendMessage(
-    request: ModelRequest(
+let response = try await router.respond(
+    to: ModelRequest(
         content: "Write a haiku about Swift concurrency.",
         privacySensitivity: .low,
         taskComplexity: .simple
@@ -53,10 +53,10 @@ Now a `.low` sensitivity request that is too large for on-device inference autom
 
 ## Streaming
 
-Every backend supports streaming through ``LanguageModelProviding/streamMessage(request:)``. Backends without native streaming fall back to yielding the full response as one chunk, so this call site always works:
+Every backend supports streaming through ``LanguageModelProviding/streamResponse(to:)``. Backends without native streaming fall back to yielding the full response as one chunk, so this call site always works:
 
 ```swift
-for try await chunk in router.streamMessage(request: request) {
+for try await chunk in router.streamResponse(to: request) {
     print(chunk, terminator: "")
 }
 ```
@@ -67,7 +67,7 @@ Wrap any backend in ``RetryingLanguageModel`` for exponential backoff:
 
 ```swift
 let robust = RetryingLanguageModel(wrapped: router, policy: .default)
-let response = try await robust.sendMessage(request: request)
+let response = try await robust.respond(to: request)
 ```
 
 ``RetryPolicy/default`` retries three times on ``LanguageModelError/unavailable``. Use ``RetryPolicy/aggressive`` for unreliable networks, or ``RetryPolicy/none`` to fail fast.

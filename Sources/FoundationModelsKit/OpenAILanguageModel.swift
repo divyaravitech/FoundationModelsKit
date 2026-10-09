@@ -48,14 +48,14 @@ public struct OpenAILanguageModel: LanguageModelProviding, Sendable {
         self.session = session
     }
 
-    public func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    public func respond(to request: ModelRequest) async throws -> ModelResponse {
         let urlRequest = try makeRequest(for: request, stream: false)
         let (data, response) = try await session.data(for: urlRequest)
         try validate(response: response, data: data)
         return try decode(data: data)
     }
 
-    public func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+    public func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {

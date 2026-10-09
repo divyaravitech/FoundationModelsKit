@@ -29,13 +29,13 @@ Conform to `LanguageModelProviding`. That's one required method:
 
 ```swift
 struct MyBackend: LanguageModelProviding, Sendable {
-    func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    func respond(to request: ModelRequest) async throws -> ModelResponse {
         // …
     }
 }
 ```
 
-Override `streamMessage(request:)` if your backend streams natively — otherwise the default implementation yields the full response as one chunk.
+Override `streamResponse(to:)` if your backend streams natively — otherwise the default implementation yields the full response as one chunk.
 
 Please:
 - Map your errors onto `LanguageModelError` so `RetryingLanguageModel` can respond correctly. `.unavailable` is retried; other cases are not.

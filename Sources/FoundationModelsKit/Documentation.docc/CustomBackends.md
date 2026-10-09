@@ -10,7 +10,7 @@ One method. That's the whole contract:
 import FoundationModelsKit
 
 struct MyLanguageModel: LanguageModelProviding {
-    func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    func respond(to request: ModelRequest) async throws -> ModelResponse {
         let text = try await myAPI.complete(request.content)
         return ModelResponse(
             content: text,
@@ -21,14 +21,14 @@ struct MyLanguageModel: LanguageModelProviding {
 }
 ```
 
-``LanguageModelProviding/streamMessage(request:)`` has a default implementation that calls `sendMessage` and yields the result as a single chunk — so your type is immediately usable everywhere, including in ``ModelRouter`` and ``RetryingLanguageModel``.
+``LanguageModelProviding/streamResponse(to:)`` has a default implementation that calls `respond(to:)` and yields the result as a single chunk — so your type is immediately usable everywhere, including in ``ModelRouter`` and ``RetryingLanguageModel``.
 
 ## Adding native streaming
 
-Override `streamMessage` when your backend supports incremental output:
+Override `streamResponse(to:)` when your backend supports incremental output:
 
 ```swift
-func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error> {
     AsyncThrowingStream { continuation in
         Task {
             do {

@@ -6,7 +6,7 @@ import Testing
 
 @Test func mockReturnsDefaultResponse() async throws {
     let model = MockLanguageModel()
-    let response = try await model.sendMessage(request: ModelRequest(content: "Hello", privacySensitivity: .low, taskComplexity: .simple))
+    let response = try await model.respond(to: ModelRequest(content: "Hello", privacySensitivity: .low, taskComplexity: .simple))
     #expect(response.content == "This is a mock response for testing.")
     #expect(response.stopReason == "end_turn")
     #expect(response.usage.inputTokens == 10)
@@ -15,15 +15,15 @@ import Testing
 @Test func mockTracksCallCount() async throws {
     let model = MockLanguageModel()
     let req = ModelRequest(content: "Ping")
-    _ = try await model.sendMessage(request: req)
-    _ = try await model.sendMessage(request: req)
+    _ = try await model.respond(to: req)
+    _ = try await model.respond(to: req)
     #expect(await model.callCount == 2)
 }
 
 @Test func mockRecordsLastRequest() async throws {
     let model = MockLanguageModel()
     let req = ModelRequest(content: "Sensitive", tools: ["search"], privacySensitivity: .high, taskComplexity: .complex)
-    _ = try await model.sendMessage(request: req)
+    _ = try await model.respond(to: req)
     let last = await model.lastRequest
     #expect(last?.content == "Sensitive")
     #expect(last?.privacySensitivity == .high)
@@ -34,20 +34,20 @@ import Testing
     let model = MockLanguageModel { _ in
         ModelResponse(content: "Custom", stopReason: "max_tokens", usage: TokenUsage(inputTokens: 5, outputTokens: 3))
     }
-    let response = try await model.sendMessage(request: ModelRequest(content: "Hi"))
+    let response = try await model.respond(to: ModelRequest(content: "Hi"))
     #expect(response.content == "Custom")
 }
 
 @Test func mockErrorSimulation() async throws {
     let model = MockLanguageModel { _ in throw LanguageModelError.unavailable }
     await #expect(throws: LanguageModelError.unavailable) {
-        try await model.sendMessage(request: ModelRequest(content: "Will fail"))
+        try await model.respond(to: ModelRequest(content: "Will fail"))
     }
 }
 
 @Test func mockResetClearsState() async throws {
     let model = MockLanguageModel()
-    _ = try await model.sendMessage(request: ModelRequest(content: "Hi"))
+    _ = try await model.respond(to: ModelRequest(content: "Hi"))
     await model.reset()
     #expect(await model.callCount == 0)
     #expect(await model.lastRequest == nil)
@@ -99,7 +99,7 @@ import Testing
 @Test func streamingDefaultImplementation() async throws {
     let model = MockLanguageModel()
     var chunks: [String] = []
-    for try await chunk in model.streamMessage(request: ModelRequest(content: "Hi")) {
+    for try await chunk in model.streamResponse(to: ModelRequest(content: "Hi")) {
         chunks.append(chunk)
     }
     #expect(chunks == ["This is a mock response for testing."])
@@ -340,7 +340,7 @@ actor AttemptCounter {
         wrapped: model,
         policy: RetryPolicy(maxAttempts: 3, initialDelay: 0, backoffMultiplier: 1, maxDelay: 0)
     )
-    let response = try await retrying.sendMessage(request: ModelRequest(content: "Hi"))
+    let response = try await retrying.respond(to: ModelRequest(content: "Hi"))
     #expect(response.content == "OK")
     #expect(await counter.count == 3)
 }
@@ -352,7 +352,7 @@ actor AttemptCounter {
         policy: RetryPolicy(maxAttempts: 2, initialDelay: 0, backoffMultiplier: 1, maxDelay: 0)
     )
     await #expect(throws: LanguageModelError.unavailable) {
-        try await retrying.sendMessage(request: ModelRequest(content: "Hi"))
+        try await retrying.respond(to: ModelRequest(content: "Hi"))
     }
     #expect(await model.callCount == 2)
 }
@@ -414,7 +414,7 @@ private func makeSDK(
 
 @Test func sdkStoresBothTurnsOnSuccess() async throws {
     let (sdk, _) = makeSDK()
-    _ = try await sdk.sendMessage(
+    _ = try await sdk.respond(to: 
         ModelRequest(content: "Hello", privacySensitivity: .high, taskComplexity: .simple)
     )
     // One user turn plus one assistant turn.
@@ -425,7 +425,7 @@ private func makeSDK(
     let (sdk, _) = makeSDK(handler: { _ in throw LanguageModelError.unavailable })
 
     await #expect(throws: LanguageModelError.unavailable) {
-        try await sdk.sendMessage(
+        try await sdk.respond(to: 
             ModelRequest(content: "Will fail", privacySensitivity: .high, taskComplexity: .simple)
         )
     }
@@ -451,8 +451,8 @@ private func makeSDK(
     })
 
     let request = ModelRequest(content: "Same message", privacySensitivity: .high, taskComplexity: .simple)
-    _ = try? await sdk.sendMessage(request)
-    _ = try await sdk.sendMessage(request)
+    _ = try? await sdk.respond(to: request)
+    _ = try await sdk.respond(to: request)
 
     #expect(await sdk.entryCount() == 2)
     let transcript = await sdk.transcript()
@@ -462,7 +462,7 @@ private func makeSDK(
 
 @Test func sdkReturnsEvaluationWhenMetricsConfigured() async throws {
     let (sdk, _) = makeSDK(metrics: ["NonEmpty"])
-    let (_, evaluation) = try await sdk.sendMessage(
+    let (_, evaluation) = try await sdk.respond(to: 
         ModelRequest(content: "Hi", privacySensitivity: .high, taskComplexity: .simple)
     )
     #expect(evaluation != nil)
@@ -471,7 +471,7 @@ private func makeSDK(
 
 @Test func sdkSkipsEvaluationWhenNoMetricsConfigured() async throws {
     let (sdk, _) = makeSDK(metrics: [])
-    let (_, evaluation) = try await sdk.sendMessage(
+    let (_, evaluation) = try await sdk.respond(to: 
         ModelRequest(content: "Hi", privacySensitivity: .high, taskComplexity: .simple)
     )
     #expect(evaluation == nil)
@@ -503,7 +503,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
         regional: RegionalAvailability()
     )
 
-    let (_, evaluation) = try await sdk.sendMessage(
+    let (_, evaluation) = try await sdk.respond(to: 
         ModelRequest(content: "Hi", privacySensitivity: .high, taskComplexity: .simple)
     )
 
@@ -514,7 +514,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
 
 @Test func sdkDiagnosticsRecordOperations() async throws {
     let (sdk, _) = makeSDK()
-    _ = try await sdk.sendMessage(
+    _ = try await sdk.respond(to: 
         ModelRequest(content: "Hello", privacySensitivity: .high, taskComplexity: .simple)
     )
     let report = await sdk.diagnostics()
@@ -524,7 +524,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
 
 @Test func sdkDiagnosticsRecordFailures() async {
     let (sdk, _) = makeSDK(handler: { _ in throw LanguageModelError.unavailable })
-    _ = try? await sdk.sendMessage(
+    _ = try? await sdk.respond(to: 
         ModelRequest(content: "Nope", privacySensitivity: .high, taskComplexity: .simple)
     )
     let report = await sdk.diagnostics()
@@ -533,7 +533,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
 
 @Test func sdkTranscriptPersistenceRoundtrip() async throws {
     let (sdk, _) = makeSDK()
-    _ = try await sdk.sendMessage(
+    _ = try await sdk.respond(to: 
         ModelRequest(content: "Persist me", privacySensitivity: .high, taskComplexity: .simple)
     )
 
@@ -552,7 +552,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
 
 @Test func sdkClearTranscriptEmptiesStore() async throws {
     let (sdk, _) = makeSDK()
-    _ = try await sdk.sendMessage(
+    _ = try await sdk.respond(to: 
         ModelRequest(content: "Hello", privacySensitivity: .high, taskComplexity: .simple)
     )
     await sdk.clearTranscript()
@@ -578,7 +578,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
     )
 
     // Large and complex — every heuristic argues for escalation.
-    _ = try await sdk.sendMessage(ModelRequest(
+    _ = try await sdk.respond(to: ModelRequest(
         content: String(repeating: "sensitive ", count: 200),
         privacySensitivity: .high,
         taskComplexity: .complex
@@ -631,11 +631,11 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
 
     struct EndlessModel: LanguageModelProviding, Sendable {
         let counter: Counter
-        func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+        func respond(to request: ModelRequest) async throws -> ModelResponse {
             ModelResponse(content: "", stopReason: "end_turn",
                           usage: TokenUsage(inputTokens: 1, outputTokens: 1))
         }
-        func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+        func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error> {
             AsyncThrowingStream { continuation in
                 let task = Task {
                     while !Task.isCancelled {
@@ -652,7 +652,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
 
     let model = EndlessModel(counter: counter)
     var received = 0
-    for try await _ in model.streamMessage(request: ModelRequest(content: "go")) {
+    for try await _ in model.streamResponse(to: ModelRequest(content: "go")) {
         received += 1
         if received == 3 { break }
     }
@@ -675,10 +675,10 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
 
     struct FailsMidStream: LanguageModelProviding, Sendable {
         let attempts: Attempts
-        func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+        func respond(to request: ModelRequest) async throws -> ModelResponse {
             throw LanguageModelError.unavailable
         }
-        func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+        func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error> {
             AsyncThrowingStream { continuation in
                 Task {
                     _ = await attempts.next()
@@ -696,7 +696,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
 
     var chunks: [String] = []
     await #expect(throws: LanguageModelError.unavailable) {
-        for try await chunk in retrying.streamMessage(request: ModelRequest(content: "hi")) {
+        for try await chunk in retrying.streamResponse(to: ModelRequest(content: "hi")) {
             chunks.append(chunk)
         }
     }
@@ -784,7 +784,7 @@ private struct SentinelMetric: EvaluationMetric, Sendable {
     let model = OnDeviceLanguageModel()
     guard !OnDeviceLanguageModel.isAvailable else { return }  // real hardware: skip
     await #expect(throws: LanguageModelError.unavailable) {
-        try await model.sendMessage(request: ModelRequest(content: "hi"))
+        try await model.respond(to: ModelRequest(content: "hi"))
     }
 }
 
@@ -975,8 +975,8 @@ private struct EchoTool: ModelTool {
     guard OnDeviceLanguageModel.isAvailable else { return }
 
     let model = OnDeviceLanguageModel()
-    let response = try await model.sendMessage(
-        request: ModelRequest(content: "Reply with exactly: OK", privacySensitivity: .high)
+    let response = try await model.respond(
+        to: ModelRequest(content: "Reply with exactly: OK", privacySensitivity: .high)
     )
     #expect(!response.content.isEmpty)
     #expect(response.usage.isEstimated, "on-device counts are estimates")
@@ -988,7 +988,7 @@ private struct EchoTool: ModelTool {
 
     let model = OnDeviceLanguageModel()
     var text = ""
-    for try await chunk in model.streamMessage(request: ModelRequest(content: "Count to three")) {
+    for try await chunk in model.streamResponse(to: ModelRequest(content: "Count to three")) {
         text += chunk
     }
     #expect(!text.isEmpty, "streaming produced nothing")
@@ -1039,8 +1039,8 @@ private struct CityLookupTool: ModelTool {
     guard OnDeviceLanguageModel.isAvailable else { return }
 
     let model = OnDeviceLanguageModel(tools: [CityLookupTool()])
-    let response = try await model.sendMessage(
-        request: ModelRequest(
+    let response = try await model.respond(
+        to: ModelRequest(
             content: "What is the population of Berlin? Use the tool.",
             privacySensitivity: .high
         )
@@ -1051,7 +1051,7 @@ private struct CityLookupTool: ModelTool {
 @Test func onDeviceWithoutToolsStillWorks() async throws {
     guard OnDeviceLanguageModel.isAvailable else { return }
     let model = OnDeviceLanguageModel()
-    let response = try await model.sendMessage(request: ModelRequest(content: "Say OK"))
+    let response = try await model.respond(to: ModelRequest(content: "Say OK"))
     #expect(!response.content.isEmpty)
 }
 
@@ -1093,7 +1093,7 @@ private struct CityLookupTool: ModelTool {
 @Test func routerEscalatesToolRequestWhenOnDeviceLacksTools() async throws {
     struct NoTools: LanguageModelProviding {
         var supportsTools: Bool { false }
-        func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+        func respond(to request: ModelRequest) async throws -> ModelResponse {
             ModelResponse(content: "local", stopReason: "end_turn",
                           usage: TokenUsage(inputTokens: 1, outputTokens: 1))
         }
@@ -1133,8 +1133,25 @@ private struct CityLookupTool: ModelTool {
     // Construction converts the schema; a bad conversion throws here.
     let model = OnDeviceLanguageModel(tools: [Nested()])
     #expect(model.supportsTools)
-    let response = try await model.sendMessage(
-        request: ModelRequest(content: "Book me 2 nights in Oslo.", privacySensitivity: .high)
+    let response = try await model.respond(
+        to: ModelRequest(content: "Book me 2 nights in Oslo.", privacySensitivity: .high)
     )
     #expect(!response.content.isEmpty)
+}
+
+// MARK: - 1.x compatibility shims
+
+@available(*, deprecated, message: "Exercises the deprecated spelling on purpose.")
+@Test func preTwoPointZeroNamesStillWork() async throws {
+    let model = MockLanguageModel()
+
+    let response = try await model.sendMessage(request: ModelRequest(content: "Hi"))
+    #expect(response.content == "This is a mock response for testing.")
+
+    var chunks: [String] = []
+    for try await chunk in model.streamMessage(request: ModelRequest(content: "Hi")) {
+        chunks.append(chunk)
+    }
+    #expect(chunks == ["This is a mock response for testing."])
+    #expect(await model.callCount == 2)
 }

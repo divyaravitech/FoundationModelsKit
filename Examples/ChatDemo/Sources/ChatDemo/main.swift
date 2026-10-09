@@ -41,7 +41,7 @@ func tierLabel(_ tier: ModelTier?) -> String {
 struct LabelledModel: LanguageModelProviding {
     let tierName: String
 
-    func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    func respond(to request: ModelRequest) async throws -> ModelResponse {
         // Simulate work so the streaming demo below is visible.
         try await Task.sleep(for: .milliseconds(150))
         return ModelResponse(
@@ -97,7 +97,7 @@ print("  \(Ansi.dim)No reason to burn network latency on a trivial prompt.\(Ansi
 banner("3. Streaming")
 
 print("  ", terminator: "")
-for try await chunk in router.streamMessage(request: shortRequest) {
+for try await chunk in router.streamResponse(to: shortRequest) {
     print(chunk, terminator: "")
     fflush(stdout)
 }
@@ -131,7 +131,7 @@ let robust = RetryingLanguageModel(
     wrapped: flakey,
     policy: RetryPolicy(maxAttempts: 3, initialDelay: 0.2, backoffMultiplier: 2)
 )
-let recovered = try await robust.sendMessage(request: ModelRequest(content: "Hello"))
+let recovered = try await robust.respond(to: ModelRequest(content: "Hello"))
 print("  → \(recovered.content)")
 
 // MARK: - 5. Conversation compaction

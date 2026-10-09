@@ -7,7 +7,7 @@ import Foundation
 /// third-party API wrappers, and test mocks.
 public protocol LanguageModelProviding: Sendable {
     /// Sends a request and returns the complete response.
-    func sendMessage(request: ModelRequest) async throws -> ModelResponse
+    func respond(to request: ModelRequest) async throws -> ModelResponse
 
     /// Whether this backend can run the tools a request asks for.
     ///
@@ -15,22 +15,22 @@ public protocol LanguageModelProviding: Sendable {
     /// on-device. Defaults to `true`, which is right for cloud backends.
     var supportsTools: Bool { get }
 
-    /// Streams the response token-by-token as an `AsyncThrowingStream<String, Error>`.
+    /// Streams the response in chunks.
     ///
-    /// A default implementation is provided that calls `sendMessage` and yields
-    /// the full content as a single chunk. Backends that support native streaming
-    /// (e.g. Anthropic SSE, Apple FoundationModels) should override this.
-    func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error>
+    /// The default implementation calls ``respond(to:)`` and yields the whole
+    /// body as one chunk, so every backend works at the call site. Override it
+    /// where the provider streams natively.
+    func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error>
 }
 
 public extension LanguageModelProviding {
     var supportsTools: Bool { true }
 
-    func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+    func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let response = try await sendMessage(request: request)
+                    let response = try await respond(to: request)
                     try Task.checkCancellation()
                     continuation.yield(response.content)
                     continuation.finish()
@@ -41,6 +41,19 @@ public extension LanguageModelProviding {
             // An early break must not leave the request running.
             continuation.onTermination = { _ in task.cancel() }
         }
+    }
+}
+
+// Pre-2.0 spelling. Callers keep compiling with a warning pointing at the fix.
+public extension LanguageModelProviding {
+    @available(*, deprecated, renamed: "respond(to:)")
+    func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+        try await respond(to: request)
+    }
+
+    @available(*, deprecated, renamed: "streamResponse(to:)")
+    func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+        streamResponse(to: request)
     }
 }
 

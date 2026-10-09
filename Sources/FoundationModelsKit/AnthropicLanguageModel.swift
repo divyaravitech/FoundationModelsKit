@@ -60,8 +60,8 @@ extension AnthropicConfiguration: CustomStringConvertible, CustomDebugStringConv
 ///     throw ConfigError.missingAPIKey   // fail with a clear message, never force-unwrap
 /// }
 /// let anthropic = AnthropicLanguageModel(config: AnthropicConfiguration(apiKey: apiKey))
-/// let response = try await anthropic.sendMessage(
-///     request: ModelRequest(content: "Hello!", privacySensitivity: .low)
+/// let response = try await anthropic.respond(
+///     to: ModelRequest(content: "Hello!", privacySensitivity: .low)
 /// )
 /// ```
 public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
@@ -86,7 +86,7 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
 
     // MARK: - LanguageModelProviding
 
-    public func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    public func respond(to request: ModelRequest) async throws -> ModelResponse {
         var messages: [[String: Any]] = [["role": "user", "content": request.content]]
         var totalUsage = TokenUsage(inputTokens: 0, outputTokens: 0)
 
@@ -132,7 +132,7 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
         return blocks
     }
 
-    public func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+    public func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {

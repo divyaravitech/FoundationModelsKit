@@ -15,8 +15,8 @@ Once your app can call both Apple Intelligence and a cloud API, you have to deci
 This makes it a parameter instead:
 
 ```swift
-let response = try await router.sendMessage(
-    request: ModelRequest(
+let response = try await router.respond(
+    to: ModelRequest(
         content: "Summarise my medical notes.",
         privacySensitivity: .high,
         taskComplexity: .simple
@@ -56,15 +56,15 @@ let router = ModelRouter(
     thirdParty: AnthropicLanguageModel(config: AnthropicConfiguration(apiKey: apiKey))
 )
 
-let response = try await router.sendMessage(
-    request: ModelRequest(content: "Write a haiku about Swift.", privacySensitivity: .low)
+let response = try await router.respond(
+    to: ModelRequest(content: "Write a haiku about Swift.", privacySensitivity: .low)
 )
 ```
 
 Streaming works on every backend, including ones with no native streaming:
 
 ```swift
-for try await chunk in router.streamMessage(request: request) {
+for try await chunk in router.streamResponse(to: request) {
     print(chunk, terminator: "")
 }
 ```
@@ -187,7 +187,7 @@ So in practice this is on-device vs. cloud today, with the middle tier ready if 
 ## How it fits together
 
 ```
-LanguageModelProviding          sendMessage + streamMessage
+LanguageModelProviding          respond + streamResponse
 ├── OnDeviceLanguageModel       Apple Intelligence
 ├── AnthropicLanguageModel      Messages API
 ├── OpenAILanguageModel         Chat Completions
@@ -212,6 +212,19 @@ More in [ARCHITECTURE.md](ARCHITECTURE.md).
 Swift 6. macOS 15+, iOS 18+, watchOS 11+, tvOS 18+, visionOS 2+.
 
 The on-device backend additionally needs macOS 26 / iOS 26 and Apple Intelligence hardware. Everything else runs on the base versions.
+
+## Migrating from 1.x
+
+Two methods were renamed to match Apple's `LanguageModelSession`:
+
+| 1.x | 2.0 |
+|---|---|
+| `sendMessage(request:)` | `respond(to:)` |
+| `streamMessage(request:)` | `streamResponse(to:)` |
+
+Calling code keeps compiling — the old names forward to the new ones and Xcode
+offers the rename. If you wrote your own backend, rename the method in your
+conformance; that part is a hard break.
 
 ## Versioning
 

@@ -17,7 +17,7 @@ public actor ModelRouter: LanguageModelProviding {
 
     /// Conformance lets `ModelRouter` be passed anywhere a `LanguageModelProviding`
     /// is expected (e.g. `ConversationStore.compact`) without a separate bridge type.
-    public func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    public func respond(to request: ModelRequest) async throws -> ModelResponse {
         try await routeRequest(request)
     }
 
@@ -34,27 +34,27 @@ public actor ModelRouter: LanguageModelProviding {
 
         case .high:
             // Data must never leave the device.
-            return try await onDeviceModel.sendMessage(request: request)
+            return try await onDeviceModel.respond(to: request)
 
         case .medium:
             if isOnDeviceEligible(request) {
-                return try await onDeviceModel.sendMessage(request: request)
+                return try await onDeviceModel.respond(to: request)
             }
             if let pcc = pccModel {
-                return try await pcc.sendMessage(request: request)
+                return try await pcc.respond(to: request)
             }
             // On-device rather than a third party.
-            return try await onDeviceModel.sendMessage(request: request)
+            return try await onDeviceModel.respond(to: request)
 
         case .low:
             if isOnDeviceEligible(request) {
-                return try await onDeviceModel.sendMessage(request: request)
+                return try await onDeviceModel.respond(to: request)
             }
             if let pcc = pccModel {
-                return try await pcc.sendMessage(request: request)
+                return try await pcc.respond(to: request)
             }
             if let thirdParty = thirdPartyModel {
-                return try await thirdParty.sendMessage(request: request)
+                return try await thirdParty.respond(to: request)
             }
             throw LanguageModelError.unavailable
         }

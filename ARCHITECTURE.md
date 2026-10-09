@@ -14,10 +14,10 @@ Everything below exists today in `Sources/FoundationModelsKit/`.
 
 ### Protocol layer — `LanguageModelProviding.swift`
 ```swift
-func sendMessage(request: ModelRequest) async throws -> ModelResponse
-func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error>
+func respond(to request: ModelRequest) async throws -> ModelResponse
+func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error>
 ```
-`streamMessage` has a default implementation that yields the full response as one chunk, so every backend supports streaming at the call site. Supporting types live in the same file: `ModelRequest`, `ModelResponse`, `TokenUsage`, `ModelTier`, `PrivacySensitivity`, `TaskComplexity`, `LanguageModelError`.
+`streamResponse(to:)` has a default implementation that yields the full response as one chunk, so every backend supports streaming at the call site. Supporting types live in the same file: `ModelRequest`, `ModelResponse`, `TokenUsage`, `ModelTier`, `PrivacySensitivity`, `TaskComplexity`, `LanguageModelError`.
 
 ### Routing — `ModelRouter.swift`
 Privacy is evaluated **before** any size or complexity heuristic:
@@ -49,7 +49,7 @@ Pluggable `EvaluationMetric` conformers, run concurrently. Built-ins: `NonEmptyM
 `DynamicProfileBuilder` / `DynamicProfile` (pre-built: `.onDeviceOnly`, `.balanced`, `.cloudFirst`), and `RegionalAvailability` for per-region tier selection.
 
 ### Facade — `SDKIntegration.swift`
-Wires routing, compaction, evaluation, transcript, and diagnostics behind one `sendMessage`. The injected `EvaluationSuite` decides which metrics run; `config.evaluationMetrics` only decides *whether* they run.
+Wires routing, compaction, evaluation, transcript, and diagnostics behind one `respond(to:)`. The injected `EvaluationSuite` decides which metrics run; `config.evaluationMetrics` only decides *whether* they run.
 
 ---
 

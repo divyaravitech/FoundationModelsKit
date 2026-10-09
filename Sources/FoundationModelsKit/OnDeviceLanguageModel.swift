@@ -15,8 +15,8 @@ import FoundationModels
 ///     return
 /// }
 /// let model = OnDeviceLanguageModel()
-/// let response = try await model.sendMessage(
-///     request: ModelRequest(content: "Summarise this.", privacySensitivity: .high)
+/// let response = try await model.respond(
+///     to: ModelRequest(content: "Summarise this.", privacySensitivity: .high)
 /// )
 /// ```
 public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
@@ -35,7 +35,7 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
     /// Only when tools were registered — the framework has no ad-hoc tool path.
     public var supportsTools: Bool { !tools.isEmpty }
 
-    public func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    public func respond(to request: ModelRequest) async throws -> ModelResponse {
 #if canImport(FoundationModels)
         guard #available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *) else {
             throw LanguageModelError.unavailable
@@ -60,7 +60,7 @@ public struct OnDeviceLanguageModel: LanguageModelProviding, Sendable {
 #endif
     }
 
-    public func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+    public func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
 #if canImport(FoundationModels)

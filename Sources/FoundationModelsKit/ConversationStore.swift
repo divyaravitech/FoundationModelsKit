@@ -193,7 +193,7 @@ public actor ConversationStore: Sendable {
             taskComplexity: .simple
         )
 
-        let response = try await model.sendMessage(request: request)
+        let response = try await model.respond(to: request)
         let summaryText = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let summaryEntry = ConversationEntry(

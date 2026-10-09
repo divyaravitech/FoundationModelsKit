@@ -11,7 +11,7 @@ swift run ChatDemo
 
 1. **Privacy routing** — the same large, complex prompt sent at `.high`, `.medium`, and `.low` sensitivity, showing that `.high` stays on-device while the others escalate.
 2. **On-device eligibility** — short, simple prompts stay local even at `.low` sensitivity.
-3. **Streaming** — token-by-token output through `streamMessage`.
+3. **Streaming** — token-by-token output through `streamResponse(to:)`.
 4. **Retry** — a backend that fails twice and succeeds on the third attempt.
 5. **Compaction** — 12 conversation turns compacted down to 6.
 6. **Evaluation** — three quality metrics scored against a response.

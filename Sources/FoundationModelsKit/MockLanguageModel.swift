@@ -5,12 +5,12 @@ import Foundation
 /// Usage:
 /// ```swift
 /// let mock = MockLanguageModel()
-/// let response = try await mock.sendMessage(request: ModelRequest(content: "Hello"))
+/// let response = try await mock.respond(to: ModelRequest(content: "Hello"))
 /// let calls = await mock.callCount   // 1
 /// ```
 public actor MockLanguageModel: LanguageModelProviding {
 
-    /// Number of times `sendMessage` has been called. Useful for assertions
+    /// Number of times `respond(to:)` has been called. Useful for assertions
     /// like "the router only called the model once despite two identical prompts."
     public private(set) var callCount: Int = 0
 
@@ -31,7 +31,7 @@ public actor MockLanguageModel: LanguageModelProviding {
 
     // MARK: - LanguageModelProviding
 
-    public func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    public func respond(to request: ModelRequest) async throws -> ModelResponse {
         callCount += 1
         lastRequest = request
         return try await responseHandler(request)

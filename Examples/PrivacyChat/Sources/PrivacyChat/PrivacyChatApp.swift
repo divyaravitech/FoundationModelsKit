@@ -150,7 +150,7 @@ final class ChatViewModel {
 private struct DemoBackend: LanguageModelProviding {
     let tier: String
 
-    func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    func respond(to request: ModelRequest) async throws -> ModelResponse {
         try await Task.sleep(for: .milliseconds(400))
         return ModelResponse(
             content: "Handled by \(tier). In a real app this would be the model's reply.",

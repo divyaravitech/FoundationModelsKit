@@ -63,13 +63,13 @@ public struct RetryingLanguageModel: LanguageModelProviding, Sendable {
         self.policy = policy
     }
 
-    public func sendMessage(request: ModelRequest) async throws -> ModelResponse {
+    public func respond(to request: ModelRequest) async throws -> ModelResponse {
         var lastError: Error = LanguageModelError.unavailable
         var delay = policy.initialDelay
 
         for attempt in 1...policy.maxAttempts {
             do {
-                return try await wrapped.sendMessage(request: request)
+                return try await wrapped.respond(to: request)
             } catch {
                 lastError = error
                 guard attempt < policy.maxAttempts, policy.shouldRetry(error) else { break }
@@ -85,7 +85,7 @@ public struct RetryingLanguageModel: LanguageModelProviding, Sendable {
     /// Once a chunk has been yielded the consumer has seen partial output, so
     /// restarting would replay it — `"Hello wor"` followed by `"Hello world"`.
     /// A failure after the first chunk is therefore surfaced, not retried.
-    public func streamMessage(request: ModelRequest) -> AsyncThrowingStream<String, Error> {
+    public func streamResponse(to request: ModelRequest) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 var lastError: Error = LanguageModelError.unavailable
@@ -94,7 +94,7 @@ public struct RetryingLanguageModel: LanguageModelProviding, Sendable {
                 for attempt in 1...policy.maxAttempts {
                     var yieldedAnything = false
                     do {
-                        for try await chunk in wrapped.streamMessage(request: request) {
+                        for try await chunk in wrapped.streamResponse(to: request) {
                             try Task.checkCancellation()
                             yieldedAnything = true
                             continuation.yield(chunk)

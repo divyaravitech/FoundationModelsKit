@@ -126,8 +126,8 @@ public actor SDKIntegration: Sendable {
     ///
     /// - Returns: The model response and, when `config.evaluationMetrics` is
     ///   non-empty, an `EvaluationResult`. `nil` when evaluation is disabled.
-    public func sendMessage(
-        _ request: ModelRequest
+    public func respond(
+        to request: ModelRequest
     ) async throws -> (response: ModelResponse, evaluation: EvaluationResult?) {
 
         let resolvedTier: ModelTier? = config.regionAwareness

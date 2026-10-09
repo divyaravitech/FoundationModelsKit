@@ -11,8 +11,8 @@ FoundationModelsKit puts that policy in one place. Declare how sensitive a reque
 ```swift
 let router = ModelRouter(onDevice: OnDeviceLanguageModel())
 
-let response = try await router.sendMessage(
-    request: ModelRequest(
+let response = try await router.respond(
+    to: ModelRequest(
         content: "Summarise my medical notes.",
         privacySensitivity: .high,   // never leaves the device
         taskComplexity: .simple
