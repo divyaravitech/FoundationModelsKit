@@ -142,9 +142,8 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
 
                     for try await line in bytes.lines {
                         try Task.checkCancellation()
-                        guard line.hasPrefix("data: ") else { continue }
-                        let payload = String(line.dropFirst(6))
-                        if payload == "[DONE]" { break }
+                        guard let payload = HTTPBackend.ssePayload(from: line) else { continue }
+                        if HTTPBackend.isStreamTerminator(payload) { break }
                         guard
                             let data = payload.data(using: .utf8),
                             let event = try? JSONDecoder().decode(StreamEvent.self, from: data),
@@ -195,18 +194,9 @@ public struct AnthropicLanguageModel: LanguageModelProviding, Sendable {
         return urlRequest
     }
 
-    /// Status codes worth trying again: rate limiting, and any server-side
-    /// fault including Anthropic's 529 "overloaded".
-    ///
-    /// These map to ``LanguageModelError/unavailable`` so that
-    /// ``RetryingLanguageModel`` backs off and retries. Mapping them to
-    /// ``AnthropicError/apiError(statusCode:body:)`` instead — as an earlier
-    /// version did for everything except 529 — meant a rate-limited request
-    /// failed outright rather than being retried.
-    /// `internal` rather than `private` so the retry classification is pinned
-    /// by tests — it is not part of the public API.
+    /// Exposed for tests; forwards to the shared classification.
     static func isTransient(statusCode: Int) -> Bool {
-        statusCode == 408 || statusCode == 429 || statusCode >= 500
+        HTTPBackend.isTransient(statusCode: statusCode)
     }
 
     private func validate(response: URLResponse, data: Data?) throws {

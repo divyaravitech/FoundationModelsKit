@@ -65,9 +65,8 @@ public struct OpenAILanguageModel: LanguageModelProviding, Sendable {
 
                     for try await line in bytes.lines {
                         try Task.checkCancellation()
-                        guard line.hasPrefix("data: ") else { continue }
-                        let payload = String(line.dropFirst(6))
-                        if payload == "[DONE]" { break }
+                        guard let payload = HTTPBackend.ssePayload(from: line) else { continue }
+                        if HTTPBackend.isStreamTerminator(payload) { break }
                         guard
                             let data = payload.data(using: .utf8),
                             let event = try? JSONDecoder().decode(StreamChunk.self, from: data),
@@ -86,8 +85,9 @@ public struct OpenAILanguageModel: LanguageModelProviding, Sendable {
         }
     }
 
+    /// Exposed for tests; forwards to the shared classification.
     static func isTransient(statusCode: Int) -> Bool {
-        statusCode == 408 || statusCode == 429 || statusCode >= 500
+        HTTPBackend.isTransient(statusCode: statusCode)
     }
 
     private func makeRequest(for request: ModelRequest, stream: Bool) throws -> URLRequest {

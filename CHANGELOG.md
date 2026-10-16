@@ -20,6 +20,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Network-layer tests for all three HTTP backends, via a `URLProtocol` stub.
+  These assert on what is *sent* — URL, headers, body, tool definitions, the
+  `stream` flag — as well as what decodes back, with no network or API key.
+  Covers the Anthropic tool loop end to end: a tool running and its result
+  being fed back, a failing tool reported to the model rather than thrown, an
+  unknown tool, the turn cap, and tool_use arriving with no tools registered.
+- Negative coverage throughout: malformed JSON, missing required fields,
+  transport failures, 400/401/429/500/529, empty choices, Gemini's
+  safety-blocked 200, unparseable SSE events, and stream cancellation.
+- Tests for `DynamicSchemaBuilder`, including nested objects, arrays, enums,
+  absent `items`, unknown types, and stable property ordering.
+- Tests for `AnthropicTokenCounter`, success and failure.
+
+### Changed
+- Extracted `HTTPBackend` for the parts the three HTTP backends genuinely
+  shared: transient-status classification and SSE line parsing. The parser now
+  tolerates `data:` without a space, trailing whitespace, and comment lines.
+
+
+### Added
 - On-device tool calling. A `ModelTool`'s JSON Schema is converted to Apple's
   `DynamicGenerationSchema` at runtime, so the same tool runs on-device and in
   the cloud without a `@Generable` type. `OnDeviceLanguageModel(tools:)`.

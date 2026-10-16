@@ -65,8 +65,8 @@ public struct GeminiLanguageModel: LanguageModelProviding, Sendable {
 
                     for try await line in bytes.lines {
                         try Task.checkCancellation()
-                        guard line.hasPrefix("data: ") else { continue }
-                        let payload = String(line.dropFirst(6))
+                        guard let payload = HTTPBackend.ssePayload(from: line) else { continue }
+                        if HTTPBackend.isStreamTerminator(payload) { break }
                         guard
                             let data = payload.data(using: .utf8),
                             let chunk = try? JSONDecoder().decode(GenerateContentResponse.self, from: data),
@@ -85,8 +85,9 @@ public struct GeminiLanguageModel: LanguageModelProviding, Sendable {
         }
     }
 
+    /// Exposed for tests; forwards to the shared classification.
     static func isTransient(statusCode: Int) -> Bool {
-        statusCode == 408 || statusCode == 429 || statusCode >= 500
+        HTTPBackend.isTransient(statusCode: statusCode)
     }
 
     private func makeRequest(for request: ModelRequest, stream: Bool) throws -> URLRequest {
